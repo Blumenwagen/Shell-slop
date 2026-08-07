@@ -29,15 +29,15 @@ type Quest = {
   scene: Scene;
 };
 
-type World = { name: string; eyebrow: string; description: string; color: string };
+type World = { name: string; eyebrow: string; description: string; color: string; image: string; mapX: number; mapY: number };
 
 const worlds: World[] = [
-  { name: "First Sparks", eyebrow: "World 1 · zero knowledge required", description: "Learn how QML thinks: objects, properties, identity, and reactive bindings.", color: "violet" },
-  { name: "Shape District", eyebrow: "World 2 · compose visible things", description: "Own space, arrange content, extract components, and design interaction feedback.", color: "coral" },
-  { name: "Motion Arcade", eyebrow: "World 3 · make state feel alive", description: "Create causal motion, named states, stable collections, and a token-driven visual language.", color: "cyan" },
-  { name: "System Frontier", eyebrow: "World 4 · enter Quickshell", description: "Cross from ordinary QML into real desktop surfaces, screen models, and system services.", color: "lime" },
-  { name: "Living Shell", eyebrow: "World 5 · architecture becomes UX", description: "Separate state, focus, input, services, and connected edge geometry into a reliable product.", color: "amber" },
-  { name: "Hero Forge", eyebrow: "World 6 · ship your own shell", description: "Add performance, IPC, a complete vertical slice, and the validation discipline of a shellwright.", color: "pink" },
+  { name: "First Sparks", eyebrow: "World 1 · zero knowledge required", description: "Learn how QML thinks: objects, properties, identity, and reactive bindings.", color: "violet", image: "/world-first-sparks.png", mapX: 20, mapY: 27 },
+  { name: "Shape District", eyebrow: "World 2 · compose visible things", description: "Own space, arrange content, extract components, and design interaction feedback.", color: "coral", image: "/world-shape-district.png", mapX: 50, mapY: 26 },
+  { name: "Motion Arcade", eyebrow: "World 3 · make state feel alive", description: "Create causal motion, named states, stable collections, and a token-driven visual language.", color: "cyan", image: "/world-motion-arcade.png", mapX: 80, mapY: 28 },
+  { name: "System Frontier", eyebrow: "World 4 · enter Quickshell", description: "Cross from ordinary QML into real desktop surfaces, screen models, and system services.", color: "lime", image: "/world-system-frontier.png", mapX: 79, mapY: 70 },
+  { name: "Living Shell", eyebrow: "World 5 · architecture becomes UX", description: "Separate state, focus, input, services, and connected edge geometry into a reliable product.", color: "amber", image: "/world-living-shell.png", mapX: 50, mapY: 72 },
+  { name: "Hero Forge", eyebrow: "World 6 · ship your own shell", description: "Add performance, IPC, a complete vertical slice, and the validation discipline of a shellwright.", color: "pink", image: "/world-hero-forge.png", mapX: 20, mapY: 70 },
 ];
 
 const ck = (label: string, hint: string, pattern: RegExp): Check => ({ label, hint, test: code => pattern.test(code) });
@@ -1452,6 +1452,30 @@ ShellRoot {
   },
 ];
 
+function quizSetFor(quest: Quest): Quiz[] {
+  const [termA, termB, termC] = quest.terms;
+  return [
+    quest.quiz,
+    {
+      question: `In this quest, what does “${termA[0]}” mean?`,
+      options: [termB[1], termA[1], termC[1]],
+      answer: 1,
+      explanation: `${termA[0]} means ${termA[1]}`,
+    },
+    {
+      question: "Which practice best matches this quest?",
+      options: [
+        "Store every visual result as unrelated mutable state.",
+        quest.rules[0],
+        "Let each visual delegate discover and poll the system independently.",
+        "Use the same timing, radius, and surface role for every context.",
+      ],
+      answer: 1,
+      explanation: `The key design rule here is: ${quest.rules[0]}`,
+    },
+  ];
+}
+
 const storageKey = "qml-shellcraft-adventure-v2";
 
 const totalXp = quests.reduce((sum, quest) => sum + quest.xp, 0);
@@ -1510,6 +1534,9 @@ function MapView({ completed, onOpenQuest }: { completed: string[]; onOpenQuest:
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const nextIndex = quests.findIndex(q => !completed.includes(q.id));
   const nextQuest = quests[nextIndex === -1 ? quests.length - 1 : nextIndex];
+  const [selectedWorld, setSelectedWorld] = useState(nextQuest.world);
+  const activeWorld = worlds[selectedWorld];
+  const activeQuests = quests.map((quest, index) => ({ ...quest, index })).filter(quest => quest.world === selectedWorld);
 
   return (
     <div className="map-view">
@@ -1541,25 +1568,42 @@ function MapView({ completed, onOpenQuest }: { completed: string[]; onOpenQuest:
 
       <section className="world-map">
         <header><div><span className="eyebrow">THE JOURNEY</span><h2>Six worlds. One living shell.</h2></div><p>Later worlds unlock as you clear quests. You can still preview any lesson—this path guides rather than punishes.</p></header>
-        <div className="world-path">
+        <div className="illustrated-map">
+          <img src="/world-map.png" alt="Illustrated QML Shellcraft map with six connected regions" />
+          <span className="map-instruction">Choose a region</span>
           {worlds.map((world, worldIndex) => {
-            const worldQuests = quests.map((q, i) => ({ ...q, index: i })).filter(q => q.world === worldIndex);
-            const done = worldQuests.filter(q => completed.includes(q.id)).length;
-            const worldOpen = worldIndex === 0 || quests.filter(q => q.world < worldIndex).some(q => !completed.includes(q.id)) === false;
+            const worldQuests = quests.filter(quest => quest.world === worldIndex);
+            const done = worldQuests.filter(quest => completed.includes(quest.id)).length;
+            const isNext = worldIndex === nextQuest.world;
             return (
-              <article className={`world-card world-${world.color} ${worldOpen ? "unlocked" : "locked"}`} key={world.name}>
-                <div className="world-heading"><WorldGlyph index={worldIndex} /><div><small>{world.eyebrow}</small><h3>{world.name}</h3><p>{world.description}</p></div><b>{done}/{worldQuests.length}</b></div>
-                <div className="quest-nodes">
-                  {worldQuests.map((quest, localIndex) => {
-                    const isDone = completed.includes(quest.id);
-                    const isNext = quest.index === nextIndex;
-                    return <button key={quest.id} className={`${isDone ? "done" : ""} ${isNext ? "next" : ""} ${quest.boss ? "boss" : ""}`} onClick={() => onOpenQuest(quest.index)} aria-label={`Open ${quest.title}`}><i>{isDone ? "✓" : quest.boss ? "◆" : localIndex + 1}</i><span><b>{quest.title}</b><small>{quest.minutes} min · {quest.xp} XP</small></span><em>→</em></button>;
-                  })}
-                </div>
-              </article>
+              <button
+                className={`map-node world-${world.color} ${selectedWorld === worldIndex ? "selected" : ""} ${done === worldQuests.length ? "done" : ""} ${isNext ? "next" : ""}`}
+                style={{ left: `${world.mapX}%`, top: `${world.mapY}%` }}
+                key={world.name}
+                onClick={() => setSelectedWorld(worldIndex)}
+                aria-label={`Explore ${world.name}, ${done} of ${worldQuests.length} quests complete`}
+              >
+                <i>{done === worldQuests.length ? "✓" : worldIndex + 1}</i>
+                <span><b>{world.name}</b><small>{done}/{worldQuests.length} cleared</small></span>
+              </button>
             );
           })}
         </div>
+        <article className={`region-drawer world-${activeWorld.color}`}>
+          <img src={activeWorld.image} alt={`${activeWorld.name} illustrated region`} />
+          <div className="region-copy">
+            <small>{activeWorld.eyebrow}</small>
+            <h3>{activeWorld.name}</h3>
+            <p>{activeWorld.description}</p>
+            <div className="region-quests">
+              {activeQuests.map((quest, localIndex) => {
+                const isDone = completed.includes(quest.id);
+                const isNext = quest.index === nextIndex;
+                return <button key={quest.id} className={`${isDone ? "done" : ""} ${isNext ? "next" : ""} ${quest.boss ? "boss" : ""}`} onClick={() => onOpenQuest(quest.index)}><i>{isDone ? "✓" : quest.boss ? "◆" : localIndex + 1}</i><span><b>{quest.title}</b><small>{quest.minutes} min · {quest.xp} XP</small></span><em>→</em></button>;
+              })}
+            </div>
+          </div>
+        </article>
       </section>
     </div>
   );
@@ -1586,23 +1630,35 @@ export default function Home() {
   const code = codes[quest.id] ?? quest.starter;
   const checkResults = useMemo(() => quest.checks.map(check => check.test(code)), [quest, code]);
   const allChecksPass = checkResults.every(Boolean);
-  const quizAnswer = quizAnswers[quest.id];
-  const quizCorrect = quizAnswer === quest.quiz.answer;
+  const quizSet = useMemo(() => quizSetFor(quest), [quest]);
+  const questQuizAnswers = quizSet.map((_, index) => quizAnswers[`${quest.id}:${index}`] ?? (index === 0 ? quizAnswers[quest.id] : undefined));
+  const quizResults = quizSet.map((quiz, index) => questQuizAnswers[index] === quiz.answer);
+  const quizCorrectCount = quizResults.filter(Boolean).length;
+  const quizAnsweredCount = questQuizAnswers.filter(answer => answer !== undefined).length;
+  const quizCorrect = quizCorrectCount === quizSet.length;
   const xp = quests.filter(q => completed.includes(q.id)).reduce((sum, q) => sum + q.xp, 0);
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const rank = ranks[level - 1];
   const levelFloor = (level - 1) * 450;
   const levelProgress = level === 7 ? 100 : Math.min(100, ((xp - levelFloor) / 450) * 100);
 
+  const openQuest = (index: number) => {
+    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false);
+    requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
+  };
+
   useEffect(() => {
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
-      if (Array.isArray(saved.completed)) setCompleted(saved.completed);
-      if (saved.codes) setCodes(current => ({ ...current, ...saved.codes }));
-      if (saved.quizAnswers) setQuizAnswers(saved.quizAnswers);
-      if (saved.notes) setNotes(saved.notes);
-    } catch { /* local progress must never block the course */ }
-    setHydrated(true);
+    const frame = requestAnimationFrame(() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        if (Array.isArray(saved.completed)) setCompleted(saved.completed);
+        if (saved.codes) setCodes(current => ({ ...current, ...saved.codes }));
+        if (saved.quizAnswers) setQuizAnswers(saved.quizAnswers);
+        if (saved.notes) setNotes(saved.notes);
+      } catch { /* local progress must never block the course */ }
+      setHydrated(true);
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -1620,20 +1676,93 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handle);
   });
 
-  const openQuest = (index: number) => {
-    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false);
-    requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
-  };
-
   const updateCode = (value: string) => { setCodes(current => ({ ...current, [quest.id]: value })); setChecked(false); };
 
+  const commitEditor = (value: string, selectionStart: number, selectionEnd = selectionStart) => {
+    updateCode(value);
+    requestAnimationFrame(() => {
+      if (!editorRef.current) return;
+      editorRef.current.selectionStart = selectionStart;
+      editorRef.current.selectionEnd = selectionEnd;
+    });
+  };
+
   const onEditorKey = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key !== "Tab") return;
-    event.preventDefault();
     const start = event.currentTarget.selectionStart;
     const end = event.currentTarget.selectionEnd;
-    updateCode(`${code.slice(0, start)}    ${code.slice(end)}`);
-    requestAnimationFrame(() => { if (editorRef.current) editorRef.current.selectionStart = editorRef.current.selectionEnd = start + 4; });
+    const lineStart = code.lastIndexOf("\n", start - 1) + 1;
+
+    if (event.key === "Tab") {
+      event.preventDefault();
+      const spansLines = start !== end || code.slice(start, end).includes("\n");
+      if (spansLines) {
+        const block = code.slice(lineStart, end);
+        const lines = block.split("\n");
+        let removed = 0;
+        let removedFromFirst = 0;
+        const transformed = lines.map((line, index) => {
+          if (!event.shiftKey) return `    ${line}`;
+          const match = line.match(/^( {1,4}|\t)/);
+          const count = match?.[0].length ?? 0;
+          removed += count;
+          if (index === 0) removedFromFirst = count;
+          return line.slice(count);
+        }).join("\n");
+        const next = `${code.slice(0, lineStart)}${transformed}${code.slice(end)}`;
+        const nextStart = event.shiftKey ? Math.max(lineStart, start - removedFromFirst) : start + 4;
+        const nextEnd = event.shiftKey ? Math.max(nextStart, end - removed) : end + lines.length * 4;
+        commitEditor(next, nextStart, nextEnd);
+        return;
+      }
+      if (event.shiftKey) {
+        const before = code.slice(lineStart, start);
+        const match = before.match(/(?: {1,4}|\t)$/);
+        const count = match?.[0].length ?? 0;
+        if (count) commitEditor(`${code.slice(0, start - count)}${code.slice(end)}`, start - count);
+        return;
+      }
+      commitEditor(`${code.slice(0, start)}    ${code.slice(end)}`, start + 4);
+      return;
+    }
+
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const lineBeforeCursor = code.slice(lineStart, start);
+      const indent = lineBeforeCursor.match(/^\s*/)?.[0] ?? "";
+      const opener = lineBeforeCursor.trimEnd().at(-1);
+      const pairs: Record<string, string> = { "{": "}", "[": "]", "(": ")" };
+      const closer = pairs[opener ?? ""];
+      if (closer && code[start] === closer) {
+        const insertion = `\n${indent}    \n${indent}`;
+        commitEditor(`${code.slice(0, start)}${insertion}${code.slice(end)}`, start + indent.length + 5);
+      } else {
+        const extra = closer ? "    " : "";
+        const insertion = `\n${indent}${extra}`;
+        commitEditor(`${code.slice(0, start)}${insertion}${code.slice(end)}`, start + insertion.length);
+      }
+      return;
+    }
+
+    const pairs: Record<string, string> = { "{": "}", "[": "]", "(": ")" };
+    if (pairs[event.key]) {
+      event.preventDefault();
+      const selected = code.slice(start, end);
+      commitEditor(`${code.slice(0, start)}${event.key}${selected}${pairs[event.key]}${code.slice(end)}`, start + 1, selected ? end + 1 : start + 1);
+      return;
+    }
+
+    if (["}", "]", ")"].includes(event.key) && code[start] === event.key && start === end) {
+      event.preventDefault();
+      commitEditor(code, start + 1);
+      return;
+    }
+
+    if (event.key === "}" && /^\s+$/.test(code.slice(lineStart, start))) {
+      event.preventDefault();
+      const whitespace = code.slice(lineStart, start);
+      const outdent = Math.min(4, whitespace.length);
+      commitEditor(`${code.slice(0, start - outdent)}}${code.slice(end)}`, start - outdent + 1);
+    }
   };
 
   const completeQuest = () => {
@@ -1662,7 +1791,7 @@ export default function Home() {
                 return <button key={item.id} className={`${index === questIndex ? "active" : ""} ${completed.includes(item.id) ? "done" : ""}`} onClick={() => openQuest(index)}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span>{item.title}</span></button>;
               })}
             </nav>
-            <div className="rail-companion"><span className="companion-face"><i /><i /><b /></span><p><b>CORE SAYS</b>{quizAnswer === undefined ? "Read slowly. Predict before you run." : quizCorrect ? "Mental model synchronized." : "Mistakes are map data. Try the explanation again."}</p></div>
+            <div className="rail-companion"><span className="companion-face"><i /><i /><b /></span><p><b>CORE SAYS</b>{quizAnsweredCount === 0 ? "Read slowly. Predict before you run." : quizCorrect ? "All three mental models synchronized." : `${quizCorrectCount}/3 signals aligned. Mistakes are map data.`}</p></div>
           </aside>
 
           <section className="lesson-scroll">
@@ -1673,6 +1802,7 @@ export default function Home() {
                 <h1>{quest.title}</h1>
                 <p className="lesson-objective">{quest.objective}</p>
                 <div className="story-callout"><span className="companion-face"><i /><i /><b /></span><div><small>MISSION BRIEF</small><p>{quest.story}</p></div></div>
+                <figure className={`lesson-world-art world-${worlds[quest.world].color}`}><img src={worlds[quest.world].image} alt={`${worlds[quest.world].name} illustrated chapter`} /><figcaption><small>YOU ARE EXPLORING</small><b>{worlds[quest.world].name}</b><span>{worlds[quest.world].description}</span></figcaption></figure>
               </header>
 
               <section className="explanation-section">
@@ -1690,11 +1820,19 @@ export default function Home() {
               </section>
 
               <section className="quiz-section">
-                <div className="section-title"><span>03</span><div><small>PREDICT</small><h2>Check the idea—not your memory</h2></div></div>
-                <div className={`quiz-card ${quizAnswer !== undefined ? (quizCorrect ? "correct" : "incorrect") : ""}`}>
-                  <p>{quest.quiz.question}</p>
-                  <div>{quest.quiz.options.map((option, index) => <button key={option} className={quizAnswer === index ? "selected" : ""} onClick={() => setQuizAnswers(current => ({ ...current, [quest.id]: index }))}><i>{String.fromCharCode(65 + index)}</i><span>{option}</span></button>)}</div>
-                  {quizAnswer !== undefined && <aside><b>{quizCorrect ? "Mental model locked in" : "Not quite—use this clue"}</b><p>{quest.quiz.explanation}</p></aside>}
+                <div className="section-title"><span>03</span><div><small>PREDICT · THREE SIGNALS</small><h2>Prove the idea from three angles</h2></div></div>
+                <div className="quiz-stack">
+                  {quizSet.map((quiz, quizIndex) => {
+                    const answer = questQuizAnswers[quizIndex];
+                    const correct = quizResults[quizIndex];
+                    const answerKey = `${quest.id}:${quizIndex}`;
+                    return <div className={`quiz-card ${answer !== undefined ? (correct ? "correct" : "incorrect") : ""}`} key={answerKey}>
+                      <div className="quiz-progress"><span>SIGNAL {quizIndex + 1}</span><i>{correct ? "LOCKED ✓" : `${quizIndex + 1} / ${quizSet.length}`}</i></div>
+                      <p>{quiz.question}</p>
+                      <div className="quiz-options">{quiz.options.map((option, optionIndex) => <button key={option} className={answer === optionIndex ? "selected" : ""} onClick={() => setQuizAnswers(current => ({ ...current, [answerKey]: optionIndex }))}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span></button>)}</div>
+                      {answer !== undefined && <aside><b>{correct ? "Mental model locked in" : "Not quite—use this clue"}</b><p>{quiz.explanation}</p></aside>}
+                    </div>;
+                  })}
                 </div>
               </section>
 
@@ -1707,9 +1845,9 @@ export default function Home() {
             <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(questIndex + 1).padStart(2, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
             <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p></section>
             <section className="preview-wrap"><div><span>CONCEPT PREVIEW</span><small>tap to change state</small></div><ScenePreview quest={quest} code={code} /></section>
-            <section className="code-editor"><div className="editor-top"><span>QML</span><small>browser checks · render for real in Quickshell</small></div><div className="editor-grid"><div className="line-numbers">{code.split("\n").map((_, index) => <i key={index}>{index + 1}</i>)}</div><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div></section>
+            <section className="code-editor"><div className="editor-top"><span>QML</span><b className="smart-indent">smart indent · auto-pairs</b><small>browser checks · render for real in Quickshell</small></div><div className="editor-grid"><div className="line-numbers">{code.split("\n").map((_, index) => <i key={index}>{index + 1}</i>)}</div><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div></section>
             <section className="gate-panel">
-              <div className="gate-heading"><div><span>MASTERY GATE</span><small>{checkResults.filter(Boolean).length}/{checkResults.length} code checks · quiz {quizCorrect ? "ready" : "pending"}</small></div><button onClick={() => setHintOpen(value => !value)}>Hint</button></div>
+              <div className="gate-heading"><div><span>MASTERY GATE</span><small>{checkResults.filter(Boolean).length}/{checkResults.length} code checks · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={() => setHintOpen(value => !value)}>Hint</button></div>
               <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}</span></div>)}</div>
               {hintOpen && <aside className="hint"><b>CORE CLUE</b>{quest.checks.find((_, index) => !checkResults[index])?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}</aside>}
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
@@ -1720,7 +1858,7 @@ export default function Home() {
         </div>
       )}
 
-      {navOpen && <div className="navigator-backdrop" onMouseDown={() => setNavOpen(false)}><section className="navigator" role="dialog" aria-modal="true" aria-label="Quest navigator" onMouseDown={event => event.stopPropagation()}><header><div><small>QUEST COMPASS</small><h2>Jump through the journey</h2></div><button onClick={() => setNavOpen(false)}>×</button></header><div>{worlds.map((world, worldIndex) => <section key={world.name}><span><WorldGlyph index={worldIndex} /><b>{world.name}</b></span>{quests.map((item, index) => ({ item, index })).filter(({ item }) => item.world === worldIndex).map(({ item, index }) => <button key={item.id} onClick={() => openQuest(index)} className={completed.includes(item.id) ? "done" : ""}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span><b>{item.title}</b><small>{item.minutes} min · {item.xp} XP</small></span><em>→</em></button>)}</section>)}</div></section></div>}
+      {navOpen && <div className="navigator-backdrop"><button className="navigator-dismiss" onClick={() => setNavOpen(false)} aria-label="Close quest navigator" /><section className="navigator" role="dialog" aria-modal="true" aria-label="Quest navigator"><header><div><small>QUEST COMPASS</small><h2>Jump through the journey</h2></div><button onClick={() => setNavOpen(false)}>×</button></header><div>{worlds.map((world, worldIndex) => <section key={world.name}><span><WorldGlyph index={worldIndex} /><b>{world.name}</b></span>{quests.map((item, index) => ({ item, index })).filter(({ item }) => item.world === worldIndex).map(({ item, index }) => <button key={item.id} onClick={() => openQuest(index)} className={completed.includes(item.id) ? "done" : ""}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span><b>{item.title}</b><small>{item.minutes} min · {item.xp} XP</small></span><em>→</em></button>)}</section>)}</div></section></div>}
 
       {celebration && <div className="celebration" role="status"><span className="burst"><i /><i /><i /><i /><i /><i /></span><CoreMark level={level} /><small>QUEST MASTERED</small><b>+{quest.xp} XP</b><p>{quest.title}</p></div>}
     </main>

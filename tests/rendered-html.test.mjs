@@ -24,6 +24,7 @@ test("server-renders the QML Shellcraft world map", async () => {
   assert.match(html, /zero → hero adventure/);
   assert.match(html, /26(?:<!-- -->)? quests/);
   assert.match(html, /Six worlds\. One living shell\./);
+  assert.match(html, /world-map\.png/);
   assert.match(html, /Tell QML what exists/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -40,10 +41,16 @@ test("keeps the complete interactive curriculum and finished metadata", async ()
   assert.equal((page.match(/^    id: "/gm) ?? []).length, 26);
   assert.equal((page.match(/name: "(?:First Sparks|Shape District|Motion Arcade|System Frontier|Living Shell|Hero Forge)"/g) ?? []).length, 6);
   assert.match(page, /quizAnswers/);
+  assert.match(page, /quizSetFor/);
+  assert.match(page, /THREE SIGNALS/);
+  assert.match(page, /smart indent · auto-pairs/);
+  assert.match(page, /event\.key === "Enter"/);
   assert.match(page, /Run code checks/);
   assert.match(page, /localStorage\.setItem/);
   assert.match(page, /ScenePreview/);
   assert.match(css, /\.world-map/);
+  assert.match(css, /\.illustrated-map/);
+  assert.match(css, /\.region-drawer/);
   assert.match(css, /\.celebration/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(layout, /QML Shellcraft — Zero to Shellwright/);
