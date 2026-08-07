@@ -54,6 +54,9 @@ test("keeps the complete interactive curriculum and finished metadata", async ()
   assert.match(page, /answerQuickQuiz/);
   assert.match(page, /REVIEW QUEUE/);
   assert.match(page, /quickQuizBest/);
+  assert.match(page, /quick-quiz-arena\.png/);
+  assert.match(page, /shell-forge-workshop\.png/);
+  assert.match(page, /qml-build-lab\.png/);
   assert.match(page, /LessonMode/);
   assert.match(page, /qmlHighlight/);
   assert.match(page, /Run code checks/);
@@ -65,6 +68,8 @@ test("keeps the complete interactive curriculum and finished metadata", async ()
   assert.match(css, /\.forge-panel/);
   assert.match(css, /\.quick-quiz-card/);
   assert.match(css, /\.quick-quiz-score/);
+  assert.match(css, /\.quick-quiz-art/);
+  assert.match(css, /\.forge-vista/);
   assert.match(css, /\.mode-build/);
   assert.match(css, /\.editor-surface/);
   assert.match(css, /\.celebration/);
