@@ -3,8 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Check = { label: string; hint: string; test: (code: string) => boolean };
-type Quiz = { question: string; options: string[]; answer: number; explanation: string };
+type Quiz = { kind?: string; question: string; options: string[]; answer: number; explanation: string };
 type Scene = "object" | "binding" | "layout" | "control" | "motion" | "model" | "theme" | "bar" | "screens" | "graph" | "drawer" | "audit";
+type LessonMode = "learn" | "split" | "build";
+type ForgeArtifact = { code: string; name: string; description: string; questId: string; file: string };
 
 type Quest = {
   id: string;
@@ -1453,25 +1455,37 @@ ShellRoot {
 ];
 
 function quizSetFor(quest: Quest): Quiz[] {
-  const [termA, termB, termC] = quest.terms;
+  const primaryCheck = quest.checks[0];
+  const alternativeCheck = quest.checks[1] ?? quest.checks[0];
+  const rawDetective = [
+    primaryCheck.hint,
+    alternativeCheck.hint,
+    "Add unrelated mutable state until the preview changes.",
+    "Copy the entire component into every delegate that needs it.",
+  ];
+  const shift = quests.findIndex(item => item.id === quest.id) % rawDetective.length;
+  const detectiveOptions = [...rawDetective.slice(shift), ...rawDetective.slice(0, shift)];
+  const detectiveAnswer = (rawDetective.length - shift) % rawDetective.length;
   return [
-    quest.quiz,
+    { ...quest.quiz, kind: "MENTAL MODEL" },
     {
-      question: `In this quest, what does “${termA[0]}” mean?`,
-      options: [termB[1], termA[1], termC[1]],
-      answer: 1,
-      explanation: `${termA[0]} means ${termA[1]}`,
+      kind: "CODE DETECTIVE",
+      question: `The build gate says “${primaryCheck.label}”. Which move addresses it most directly?`,
+      options: detectiveOptions,
+      answer: detectiveAnswer,
+      explanation: primaryCheck.hint,
     },
     {
-      question: "Which practice best matches this quest?",
+      kind: "DESIGN TRANSFER",
+      question: "A teammate wants a quick shortcut. Which response protects the shell's design?",
       options: [
-        "Store every visual result as unrelated mutable state.",
         quest.rules[0],
-        "Let each visual delegate discover and poll the system independently.",
-        "Use the same timing, radius, and surface role for every context.",
+        "Duplicate the logic inside every visual component so each one is independent.",
+        "Replace the reactive relationship with a timer that copies values repeatedly.",
+        "Hide the edge case and optimize only the polished screenshot state.",
       ],
-      answer: 1,
-      explanation: `The key design rule here is: ${quest.rules[0]}`,
+      answer: 0,
+      explanation: `Transfer rule: ${quest.rules[0]}`,
     },
   ];
 }
@@ -1480,6 +1494,151 @@ const storageKey = "qml-shellcraft-adventure-v2";
 
 const totalXp = quests.reduce((sum, quest) => sum + quest.xp, 0);
 const ranks = ["Spark", "Binder", "Composer", "Signal Runner", "Edge Keeper", "Screen Tamer", "Shellwright"];
+
+const forgeArtifacts: ForgeArtifact[] = [
+  { code: "RT", name: "Root Tree", description: "A compositional object tree with explicit ownership.", questId: "qml-is-a-description", file: "shell.qml" },
+  { code: "BX", name: "Binding Core", description: "Reactive state that drives geometry and appearance.", questId: "reactive-bindings", file: "state/BindingCore.qml" },
+  { code: "CP", name: "Component Contract", description: "Reusable controls with required inputs and intent signals.", questId: "component-contracts", file: "components/StatusPill.qml" },
+  { code: "SL", name: "State Layer", description: "One interaction grammar for hover, press, focus, and selection.", questId: "interaction-state", file: "components/StateLayer.qml" },
+  { code: "MX", name: "Motion Roles", description: "Interruptible semantic motion with causal origins.", questId: "behaviors-motion", file: "config/Motion.qml" },
+  { code: "MD", name: "Stable Model", description: "Changing collections with durable delegate identity.", questId: "models-delegates", file: "models/WorkspaceModel.qml" },
+  { code: "TH", name: "Theme Kernel", description: "Wallpaper-aware semantic tokens and radius roles.", questId: "theme-tokens", file: "config/Theme.qml" },
+  { code: "PW", name: "Screen Edge", description: "A real PanelWindow with intentional exclusion.", questId: "panelwindow-edges", file: "modules/bar/Bar.qml" },
+  { code: "VS", name: "Screen Factory", description: "Per-screen windows that survive monitor changes.", questId: "variants-screens", file: "modules/bar/Screens.qml" },
+  { code: "SV", name: "Service Boundary", description: "One observer exposing stable system truth to many views.", questId: "service-boundaries", file: "services/SystemService.qml" },
+  { code: "CG", name: "Connected Surface", description: "Edge and drawer geometry driven by shared progress.", questId: "connected-geometry", file: "modules/drawer/Drawer.qml" },
+  { code: "IP", name: "Shell API", description: "Visual, shortcut, and IPC routes sharing one action.", questId: "ipc-shortcuts", file: "state/Actions.qml" },
+  { code: "SW", name: "Shellwright Crest", description: "A validation contract for reload, hotplug, failure, and focus.", questId: "validation-capstone", file: "VALIDATION.md" },
+];
+
+function qmlHighlight(code: string) {
+  const tokens = code.split(/(\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:import|pragma|property|required|readonly|signal|function|id|true|false|null|var|int|bool|real|string|color|url)\b|\bon[A-Z]\w*\b|\b[A-Z]\w*\b|\b\d+(?:\.\d+)?\b)/g);
+  return tokens.map((token, index) => {
+    let className = "";
+    if (token.startsWith("//")) className = "tok-comment";
+    else if (/^["']/.test(token)) className = "tok-string";
+    else if (/^(?:import|pragma|property|required|readonly|signal|function|id|true|false|null|var|int|bool|real|string|color|url|on[A-Z])/.test(token)) className = "tok-keyword";
+    else if (/^[A-Z]/.test(token)) className = "tok-type";
+    else if (/^\d/.test(token)) className = "tok-number";
+    return className ? <span className={className} key={index}>{token}</span> : token;
+  });
+}
+
+function formatQml(code: string) {
+  let depth = 0;
+  return code.split("\n").map(rawLine => {
+    const line = rawLine.trim();
+    if (!line) return "";
+    const closesFirst = /^[}\])]/.test(line);
+    if (closesFirst) depth = Math.max(0, depth - 1);
+    const formatted = `${"    ".repeat(depth)}${line}`;
+    const opens = (line.match(/[([{]/g) ?? []).length;
+    const closes = (line.match(/[\]})]/g) ?? []).length;
+    depth = Math.max(0, depth + opens - closes + (closesFirst ? 1 : 0));
+    return formatted;
+  }).join("\n");
+}
+
+function forgeProjectFiles(completed: string[], codes: Record<string, string>) {
+  const files: Record<string, string> = {
+    "README.md": `# My QML Shellcraft project
+
+This project grows with the quests you master.
+
+## Run
+
+1. Install Quickshell 0.3.x and Qt 6.
+2. From this directory run: \`quickshell -p .\`
+3. Edit a QML file while Quickshell is running to practice hot reload.
+
+The generated shell is an independent learning scaffold inspired by End-4 and Caelestia design principles; it does not copy their code or identity.
+`,
+    "shell.qml": `import Quickshell
+import QtQuick
+
+ShellRoot {
+    Variants {
+        model: Quickshell.screens
+
+        PanelWindow {
+            required property ShellScreen modelData
+            screen: modelData
+            anchors { top: true; left: true; right: true }
+            implicitHeight: 42
+            color: "transparent"
+
+            Rectangle {
+                anchors.fill: parent
+                color: "#211a2d"
+                radius: 14
+
+                Text {
+                    anchors.centerIn: parent
+                    color: "#f7f2ff"
+                    text: "My living shell"
+                }
+            }
+        }
+    }
+}
+`,
+    ".qmlls.ini": "[General]\n",
+    "config/Theme.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property color background: "#100d18"\n    readonly property color surface: "#211a2d"\n    readonly property color primary: "#ab9aff"\n    readonly property color onSurface: "#f7f2ff"\n    readonly property int spacingSmall: 8\n    readonly property int spacingMedium: 14\n    readonly property int radiusSmall: 8\n    readonly property int radiusSurface: 22\n}\n`,
+    "config/Motion.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property int immediate: 120\n    readonly property int fastEffect: 190\n    readonly property int enter: 360\n    readonly property int exit: 210\n    readonly property int spatial: 430\n}\n`,
+    "state/ShellState.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    property bool drawerOpen: false\n    property real drawerProgress: drawerOpen ? 1 : 0\n}\n`,
+    "services/SystemService.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property bool ready: true\n    readonly property string status: ready ? "ready" : "unavailable"\n}\n`,
+    "components/StateLayer.qml": `import QtQuick\n\nRectangle {\n    required property bool hovered\n    required property bool pressed\n    color: pressed ? "#33ffffff" : hovered ? "#1fffffff" : "transparent"\n    Behavior on color { ColorAnimation { duration: 120 } }\n}\n`,
+    "VALIDATION.md": "# Validation matrix\n\n- [ ] Hot reload\n- [ ] Monitor hotplug\n- [ ] Fullscreen policy\n- [ ] Keyboard focus\n- [ ] Service failure\n- [ ] Reduced motion\n",
+  };
+  completed.forEach(id => {
+    const index = quests.findIndex(quest => quest.id === id);
+    if (index === -1) return;
+    const quest = quests[index];
+    files[`practice/${String(index + 1).padStart(2, "0")}-${quest.id}.qml`] = codes[id] ?? quest.solution;
+  });
+  return files;
+}
+
+function writeTarText(target: Uint8Array, offset: number, value: string, length: number) {
+  const encoded = new TextEncoder().encode(value);
+  target.set(encoded.slice(0, length), offset);
+}
+
+function buildTar(files: Record<string, string>) {
+  const encoder = new TextEncoder();
+  const entries = Object.entries(files).map(([name, content]) => ({ name, bytes: encoder.encode(content) }));
+  const total = entries.reduce((sum, entry) => sum + 512 + Math.ceil(entry.bytes.length / 512) * 512, 1024);
+  const archive = new Uint8Array(total);
+  let offset = 0;
+  entries.forEach(entry => {
+    const header = archive.subarray(offset, offset + 512);
+    writeTarText(header, 0, entry.name, 100);
+    writeTarText(header, 100, "0000644\0", 8);
+    writeTarText(header, 108, "0000000\0", 8);
+    writeTarText(header, 116, "0000000\0", 8);
+    writeTarText(header, 124, `${entry.bytes.length.toString(8).padStart(11, "0")}\0`, 12);
+    writeTarText(header, 136, `${Math.floor(Date.now() / 1000).toString(8).padStart(11, "0")}\0`, 12);
+    header.fill(32, 148, 156);
+    header[156] = "0".charCodeAt(0);
+    writeTarText(header, 257, "ustar\0", 6);
+    writeTarText(header, 263, "00", 2);
+    const checksum = header.reduce((sum, byte) => sum + byte, 0);
+    writeTarText(header, 148, `${checksum.toString(8).padStart(6, "0")}\0 `, 8);
+    offset += 512;
+    archive.set(entry.bytes, offset);
+    offset += Math.ceil(entry.bytes.length / 512) * 512;
+  });
+  return archive;
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 function readNumber(code: string, name: string, fallback: number) {
   const match = code.match(new RegExp(`${name}\\s*:\\s*(\\d+)`));
@@ -1529,7 +1688,7 @@ function WorldGlyph({ index }: { index: number }) {
   return <span className={`world-glyph glyph-${index}`} aria-hidden="true"><i /><i /><i /></span>;
 }
 
-function MapView({ completed, onOpenQuest }: { completed: string[]; onOpenQuest: (index: number) => void }) {
+function MapView({ completed, onOpenQuest, onOpenForge }: { completed: string[]; onOpenQuest: (index: number) => void; onOpenForge: () => void }) {
   const xp = quests.filter(q => completed.includes(q.id)).reduce((sum, q) => sum + q.xp, 0);
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const nextIndex = quests.findIndex(q => !completed.includes(q.id));
@@ -1537,6 +1696,7 @@ function MapView({ completed, onOpenQuest }: { completed: string[]; onOpenQuest:
   const [selectedWorld, setSelectedWorld] = useState(nextQuest.world);
   const activeWorld = worlds[selectedWorld];
   const activeQuests = quests.map((quest, index) => ({ ...quest, index })).filter(quest => quest.world === selectedWorld);
+  const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId)).length;
 
   return (
     <div className="map-view">
@@ -1564,6 +1724,13 @@ function MapView({ completed, onOpenQuest }: { completed: string[]; onOpenQuest:
         <div><i>02</i><b>Predict</b><small>Check your mental model</small></div><em>→</em>
         <div><i>03</i><b>Build</b><small>Edit real QML</small></div><em>→</em>
         <div><i>04</i><b>Master</b><small>Pass the gate, earn XP</small></div>
+      </section>
+
+      <section className="forge-ribbon">
+        <div className="forge-ribbon-mark"><i /><i /><b>FG</b></div>
+        <div><small>YOUR CUMULATIVE PROJECT</small><h2>The Forge remembers what you build.</h2><p>Boss quests unlock real shell artifacts. Export the growing Quickshell project whenever you want to leave the browser and run it locally.</p></div>
+        <span><b>{unlockedArtifacts}</b><small>of {forgeArtifacts.length}<br />artifacts forged</small></span>
+        <button onClick={onOpenForge}>Open Forge <i>→</i></button>
       </section>
 
       <section className="world-map">
@@ -1622,9 +1789,14 @@ export default function Home() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [navOpen, setNavOpen] = useState(false);
+  const [forgeOpen, setForgeOpen] = useState(false);
+  const [lessonMode, setLessonMode] = useState<LessonMode>("split");
+  const [importStatus, setImportStatus] = useState("");
   const [celebration, setCelebration] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const highlightRef = useRef<HTMLPreElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
 
   const quest = quests[questIndex];
   const code = codes[quest.id] ?? quest.starter;
@@ -1641,9 +1813,11 @@ export default function Home() {
   const rank = ranks[level - 1];
   const levelFloor = (level - 1) * 450;
   const levelProgress = level === 7 ? 100 : Math.min(100, ((xp - levelFloor) / 450) * 100);
+  const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId));
+  const forgeFiles = useMemo(() => forgeProjectFiles(completed, codes), [completed, codes]);
 
   const openQuest = (index: number) => {
-    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false);
+    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false);
     requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -1655,6 +1829,7 @@ export default function Home() {
         if (saved.codes) setCodes(current => ({ ...current, ...saved.codes }));
         if (saved.quizAnswers) setQuizAnswers(saved.quizAnswers);
         if (saved.notes) setNotes(saved.notes);
+        if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
       } catch { /* local progress must never block the course */ }
       setHydrated(true);
     });
@@ -1662,13 +1837,13 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ completed, codes, quizAnswers, notes }));
-  }, [completed, codes, quizAnswers, notes, hydrated]);
+    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ completed, codes, quizAnswers, notes, lessonMode }));
+  }, [completed, codes, quizAnswers, notes, lessonMode, hydrated]);
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { setNavOpen(false); setGlossaryOpen(false); }
-      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && view === "quest") { event.preventDefault(); setChecked(true); }
+      if (event.key === "Escape") { setNavOpen(false); setForgeOpen(false); setGlossaryOpen(false); }
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && view === "quest") { event.preventDefault(); setChecked(true); if (!allChecksPass) setHintOpen(true); }
       if (event.altKey && event.key === "ArrowRight") openQuest(Math.min(questIndex + 1, quests.length - 1));
       if (event.altKey && event.key === "ArrowLeft") openQuest(Math.max(questIndex - 1, 0));
     };
@@ -1677,6 +1852,59 @@ export default function Home() {
   });
 
   const updateCode = (value: string) => { setCodes(current => ({ ...current, [quest.id]: value })); setChecked(false); };
+
+  const syncEditorScroll = (target: HTMLTextAreaElement) => {
+    if (!highlightRef.current) return;
+    highlightRef.current.scrollTop = target.scrollTop;
+    highlightRef.current.scrollLeft = target.scrollLeft;
+  };
+
+  const insertSnippet = (snippet: string) => {
+    const editor = editorRef.current;
+    const start = editor?.selectionStart ?? code.length;
+    const end = editor?.selectionEnd ?? code.length;
+    const prefix = start > 0 && code[start - 1] !== "\n" ? "\n" : "";
+    commitEditor(`${code.slice(0, start)}${prefix}${snippet}${code.slice(end)}`, start + prefix.length + snippet.length);
+  };
+
+  const runChecks = () => {
+    setChecked(true);
+    if (!allChecksPass) setHintOpen(true);
+  };
+
+  const exportForgeProject = async () => {
+    const tar = buildTar(forgeFiles);
+    try {
+      const compressed = new Blob([tar.buffer as ArrayBuffer]).stream().pipeThrough(new CompressionStream("gzip"));
+      downloadBlob(await new Response(compressed).blob(), "my-qml-shellcraft-project.tar.gz");
+    } catch {
+      downloadBlob(new Blob([tar.buffer as ArrayBuffer], { type: "application/x-tar" }), "my-qml-shellcraft-project.tar");
+    }
+  };
+
+  const exportProgress = () => {
+    const payload = JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), completed, codes, quizAnswers, notes, lessonMode }, null, 2);
+    downloadBlob(new Blob([payload], { type: "application/json" }), "qml-shellcraft-progress.json");
+  };
+
+  const importProgress = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const saved = JSON.parse(await file.text());
+      if (!Array.isArray(saved.completed) || !saved.codes || typeof saved.codes !== "object") throw new Error("Invalid progress file");
+      const knownIds = new Set(quests.map(item => item.id));
+      setCompleted(saved.completed.filter((id: unknown): id is string => typeof id === "string" && knownIds.has(id)));
+      setCodes(current => ({ ...current, ...saved.codes }));
+      if (saved.quizAnswers && typeof saved.quizAnswers === "object") setQuizAnswers(saved.quizAnswers);
+      if (saved.notes && typeof saved.notes === "object") setNotes(saved.notes);
+      if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
+      setImportStatus("Progress restored on this device.");
+    } catch {
+      setImportStatus("That file is not a valid Shellcraft progress export.");
+    }
+    event.target.value = "";
+  };
 
   const commitEditor = (value: string, selectionStart: number, selectionEnd = selectionStart) => {
     updateCode(value);
@@ -1773,15 +2001,15 @@ export default function Home() {
   };
 
   return (
-    <main className={`adventure-shell ${view === "map" ? "map-mode" : "quest-mode"}`}>
+    <main className={`adventure-shell ${view === "map" ? "map-mode" : "quest-mode"} lesson-${lessonMode}`}>
       <header className="hud">
         <button className="brand" onClick={() => setView("map")} aria-label="Open world map"><CoreMark level={level} /><span><b>QML SHELLCRAFT</b><small>zero → hero adventure</small></span></button>
-        <nav><button className={view === "map" ? "active" : ""} onClick={() => setView("map")}>World map</button><button className={view === "quest" ? "active" : ""} onClick={() => setView("quest")}>Current quest</button></nav>
-        <div className="player-hud"><span className="rank-chip"><i>LV {level}</i><b>{rank}</b></span><div className="xp-mini"><span><i style={{ width: `${levelProgress}%` }} /></span><small>{xp.toLocaleString("en-US")} XP</small></div><button className="nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open quest navigator">{quests.length} quests <i>⌘</i></button></div>
+        <nav><button className={view === "map" ? "active" : ""} onClick={() => setView("map")}>World map</button><button className={view === "quest" ? "active" : ""} onClick={() => setView("quest")}>Current quest</button>{view === "quest" && <span className="mode-switcher" aria-label="Lesson focus mode">{(["learn", "split", "build"] as LessonMode[]).map(mode => <button key={mode} className={lessonMode === mode ? "selected" : ""} onClick={() => setLessonMode(mode)} aria-pressed={lessonMode === mode}>{mode}</button>)}</span>}</nav>
+        <div className="player-hud"><span className="rank-chip"><i>LV {level}</i><b>{rank}</b></span><div className="xp-mini"><span><i style={{ width: `${levelProgress}%` }} /></span><small>{xp.toLocaleString("en-US")} XP</small></div><button className="forge-trigger" onClick={() => setForgeOpen(true)}><i>FG</i><span>Forge</span><b>{unlockedArtifacts.length}</b></button><button className="nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open quest navigator">{quests.length} quests <i>⌘</i></button></div>
       </header>
 
-      {view === "map" ? <MapView completed={completed} onOpenQuest={openQuest} /> : (
-        <div className="quest-view">
+      {view === "map" ? <MapView completed={completed} onOpenQuest={openQuest} onOpenForge={() => setForgeOpen(true)} /> : (
+        <div className={`quest-view mode-${lessonMode}`}>
           <aside className="quest-rail">
             <button className="back-map" onClick={() => setView("map")}><i>←</i><span>World map</span></button>
             <div className="rail-world"><WorldGlyph index={quest.world} /><small>{worlds[quest.world].eyebrow}</small><b>{worlds[quest.world].name}</b><span>{questIndex + 1} / {quests.length}</span></div>
@@ -1827,7 +2055,7 @@ export default function Home() {
                     const correct = quizResults[quizIndex];
                     const answerKey = `${quest.id}:${quizIndex}`;
                     return <div className={`quiz-card ${answer !== undefined ? (correct ? "correct" : "incorrect") : ""}`} key={answerKey}>
-                      <div className="quiz-progress"><span>SIGNAL {quizIndex + 1}</span><i>{correct ? "LOCKED ✓" : `${quizIndex + 1} / ${quizSet.length}`}</i></div>
+                      <div className="quiz-progress"><span>SIGNAL {quizIndex + 1} · {quiz.kind}</span><i>{correct ? "LOCKED ✓" : `${quizIndex + 1} / ${quizSet.length}`}</i></div>
                       <p>{quiz.question}</p>
                       <div className="quiz-options">{quiz.options.map((option, optionIndex) => <button key={option} className={answer === optionIndex ? "selected" : ""} onClick={() => setQuizAnswers(current => ({ ...current, [answerKey]: optionIndex }))}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span></button>)}</div>
                       {answer !== undefined && <aside><b>{correct ? "Mental model locked in" : "Not quite—use this clue"}</b><p>{quiz.explanation}</p></aside>}
@@ -1845,18 +2073,37 @@ export default function Home() {
             <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(questIndex + 1).padStart(2, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
             <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p></section>
             <section className="preview-wrap"><div><span>CONCEPT PREVIEW</span><small>tap to change state</small></div><ScenePreview quest={quest} code={code} /></section>
-            <section className="code-editor"><div className="editor-top"><span>QML</span><b className="smart-indent">smart indent · auto-pairs</b><small>browser checks · render for real in Quickshell</small></div><div className="editor-grid"><div className="line-numbers">{code.split("\n").map((_, index) => <i key={index}>{index + 1}</i>)}</div><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div></section>
+            <section className="code-editor">
+              <div className="editor-top"><span>QML</span><b className="smart-indent">syntax · smart indent · auto-pairs</b><small>browser checks · render for real in Quickshell</small></div>
+              <div className="editor-tools" aria-label="QML editor tools"><button onClick={() => insertSnippet("property bool active: false")}>+ property</button><button onClick={() => insertSnippet("Text {\n    text: \"Hello, shell\"\n}")}>+ Text</button><button onClick={() => insertSnippet("Behavior on opacity {\n    NumberAnimation { duration: 220 }\n}")}>+ Behavior</button><i /><button onClick={() => updateCode(formatQml(code))}>Format</button></div>
+              <div className="editor-grid">
+                <div className="line-numbers">{code.split("\n").map((_, index) => <i key={index}>{index + 1}</i>)}</div>
+                <div className="editor-surface"><pre ref={highlightRef} aria-hidden="true"><code>{qmlHighlight(code)}{"\n"}</code></pre><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} onScroll={event => syncEditorScroll(event.currentTarget)} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div>
+              </div>
+              {checked && !allChecksPass && <div className="editor-diagnostic" role="status"><i>!</i><span><b>{quest.checks.find((_, index) => !checkResults[index])?.label}</b><small>{quest.checks.find((_, index) => !checkResults[index])?.hint}</small></span></div>}
+            </section>
             <section className="gate-panel">
-              <div className="gate-heading"><div><span>MASTERY GATE</span><small>{checkResults.filter(Boolean).length}/{checkResults.length} code checks · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={() => setHintOpen(value => !value)}>Hint</button></div>
-              <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}</span></div>)}</div>
+              <div className="gate-heading"><div><span>MASTERY GATE</span><small aria-live="polite">{checkResults.filter(Boolean).length}/{checkResults.length} code checks · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={() => setHintOpen(value => !value)}>Hint</button></div>
+              <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}{checked && !checkResults[index] && <small>{check.hint}</small>}</span></div>)}</div>
               {hintOpen && <aside className="hint"><b>CORE CLUE</b>{quest.checks.find((_, index) => !checkResults[index])?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}</aside>}
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
-              <div className="gate-actions"><button className="solution-trigger" onClick={() => setSolutionOpen(value => !value)}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={() => setChecked(true)}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
+              <div className="gate-actions"><button className="solution-trigger" onClick={() => setSolutionOpen(value => !value)}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
             </section>
             <footer><button disabled={questIndex === 0} onClick={() => openQuest(questIndex - 1)}>←</button><span>Alt + arrows navigate</span><button disabled={questIndex === quests.length - 1} onClick={() => openQuest(questIndex + 1)}>→</button></footer>
           </aside>
         </div>
       )}
+
+      {forgeOpen && <div className="forge-backdrop"><button className="forge-dismiss" onClick={() => setForgeOpen(false)} aria-label="Close the Forge" /><aside className="forge-panel" role="dialog" aria-modal="true" aria-label="Shell Forge project">
+        <header><div className="forge-panel-mark"><i /><i /><b>FG</b></div><div><small>CUMULATIVE PROJECT</small><h2>Shell Forge</h2><p>Every mastered system becomes a reusable part of your real shell.</p></div><button onClick={() => setForgeOpen(false)} aria-label="Close the Forge">×</button></header>
+        <section className="forge-progress"><div><span><i style={{ width: `${(unlockedArtifacts.length / forgeArtifacts.length) * 100}%` }} /></span><b>{unlockedArtifacts.length}/{forgeArtifacts.length} artifacts forged</b></div><small>{completed.length}/{quests.length} quests mastered · {Object.keys(forgeFiles).length} project files</small></section>
+        <section className="forge-project"><div><small>RUNNABLE STARTER</small><h3>My living shell</h3><p>The bundle contains a screen-aware Quickshell bar, local run instructions, editor configuration, and one practice file for every mastered quest.</p><div className="forge-actions"><button className="forge-download" onClick={exportForgeProject}>Download project <i>.tar.gz</i></button><button onClick={exportProgress}>Export progress</button><button onClick={() => importRef.current?.click()}>Import progress</button><input ref={importRef} type="file" accept="application/json" onChange={importProgress} /></div>{importStatus && <span className="import-status" role="status">{importStatus}</span>}</div><ol aria-label="Generated project files">{Object.keys(forgeFiles).slice(0, 7).map(file => <li key={file}><i>{file.endsWith(".qml") ? "Q" : file.endsWith(".md") ? "M" : "C"}</i><span>{file}</span></li>)}</ol></section>
+        <section className="artifact-section"><div className="forge-section-title"><span>ARTIFACT INVENTORY</span><p>Unlocks follow the architecture of a living shell: composition → components → state → services → screens → validation.</p></div><div className="artifact-grid">{forgeArtifacts.map((artifact, index) => {
+          const unlocked = completed.includes(artifact.questId);
+          const questIndexForArtifact = quests.findIndex(item => item.id === artifact.questId);
+          return <button key={artifact.name} className={unlocked ? "unlocked" : "locked"} onClick={() => openQuest(questIndexForArtifact)}><i>{unlocked ? artifact.code : String(index + 1).padStart(2, "0")}</i><span><b>{artifact.name}</b><small>{unlocked ? artifact.file : `Master: ${quests[questIndexForArtifact]?.title}`}</small><em>{artifact.description}</em></span><strong>{unlocked ? "READY" : "LOCKED"}</strong></button>;
+        })}</div></section>
+      </aside></div>}
 
       {navOpen && <div className="navigator-backdrop"><button className="navigator-dismiss" onClick={() => setNavOpen(false)} aria-label="Close quest navigator" /><section className="navigator" role="dialog" aria-modal="true" aria-label="Quest navigator"><header><div><small>QUEST COMPASS</small><h2>Jump through the journey</h2></div><button onClick={() => setNavOpen(false)}>×</button></header><div>{worlds.map((world, worldIndex) => <section key={world.name}><span><WorldGlyph index={worldIndex} /><b>{world.name}</b></span>{quests.map((item, index) => ({ item, index })).filter(({ item }) => item.world === worldIndex).map(({ item, index }) => <button key={item.id} onClick={() => openQuest(index)} className={completed.includes(item.id) ? "done" : ""}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span><b>{item.title}</b><small>{item.minutes} min · {item.xp} XP</small></span><em>→</em></button>)}</section>)}</div></section></div>}
 
