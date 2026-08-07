@@ -7,6 +7,9 @@ type Quiz = { kind?: string; question: string; options: string[]; answer: number
 type Scene = "object" | "binding" | "layout" | "control" | "motion" | "model" | "theme" | "bar" | "screens" | "graph" | "drawer" | "audit";
 type LessonMode = "learn" | "split" | "build";
 type ForgeArtifact = { code: string; name: string; description: string; questId: string; file: string };
+type QuickQuizScope = "path" | "all";
+type QuickQuizPhase = "ready" | "playing" | "result";
+type QuickQuizItem = { questId: string; questIndex: number; world: number; questTitle: string; quiz: Quiz };
 
 type Quest = {
   id: string;
@@ -1490,6 +1493,15 @@ function quizSetFor(quest: Quest): Quiz[] {
   ];
 }
 
+function shuffled<T>(items: T[]) {
+  const next = [...items];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+  return next;
+}
+
 const storageKey = "qml-shellcraft-adventure-v2";
 
 const totalXp = quests.reduce((sum, quest) => sum + quest.xp, 0);
@@ -1688,7 +1700,7 @@ function WorldGlyph({ index }: { index: number }) {
   return <span className={`world-glyph glyph-${index}`} aria-hidden="true"><i /><i /><i /></span>;
 }
 
-function MapView({ completed, onOpenQuest, onOpenForge }: { completed: string[]; onOpenQuest: (index: number) => void; onOpenForge: () => void }) {
+function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { completed: string[]; onOpenQuest: (index: number) => void; onOpenForge: () => void; onOpenQuickQuiz: () => void }) {
   const xp = quests.filter(q => completed.includes(q.id)).reduce((sum, q) => sum + q.xp, 0);
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const nextIndex = quests.findIndex(q => !completed.includes(q.id));
@@ -1707,6 +1719,7 @@ function MapView({ completed, onOpenQuest, onOpenForge }: { completed: string[];
           <p>No prior QML knowledge needed. Every quest explains one idea in plain language, lets you predict what code will do, then asks you to build the smallest real piece yourself.</p>
           <div className="hero-actions">
             <button className="primary-cta" onClick={() => onOpenQuest(nextIndex === -1 ? quests.length - 1 : nextIndex)}><span>Continue quest</span><b>{nextQuest.title}</b><i>→</i></button>
+            <button className="quick-quiz-cta" onClick={onOpenQuickQuiz}><i>Q5</i><span><b>Quick quiz</b><small>5 questions · ~2 min</small></span><em>→</em></button>
             <div className="course-promise"><i>{quests.length}</i><span>quests</span><i>6</i><span>worlds</span><i>~15h</i><span>to hero</span></div>
           </div>
         </div>
@@ -1790,6 +1803,17 @@ export default function Home() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [navOpen, setNavOpen] = useState(false);
   const [forgeOpen, setForgeOpen] = useState(false);
+  const [quickQuizOpen, setQuickQuizOpen] = useState(false);
+  const [quickQuizPhase, setQuickQuizPhase] = useState<QuickQuizPhase>("ready");
+  const [quickQuizScope, setQuickQuizScope] = useState<QuickQuizScope>("path");
+  const [quickQuizItems, setQuickQuizItems] = useState<QuickQuizItem[]>([]);
+  const [quickQuizStep, setQuickQuizStep] = useState(0);
+  const [quickQuizAnswers, setQuickQuizAnswers] = useState<number[]>([]);
+  const [quickQuizScore, setQuickQuizScore] = useState(0);
+  const [quickQuizStreak, setQuickQuizStreak] = useState(0);
+  const [quickQuizRunBestStreak, setQuickQuizRunBestStreak] = useState(0);
+  const [quickQuizBest, setQuickQuizBest] = useState(0);
+  const [quickQuizRuns, setQuickQuizRuns] = useState(0);
   const [lessonMode, setLessonMode] = useState<LessonMode>("split");
   const [importStatus, setImportStatus] = useState("");
   const [celebration, setCelebration] = useState(false);
@@ -1815,9 +1839,12 @@ export default function Home() {
   const levelProgress = level === 7 ? 100 : Math.min(100, ((xp - levelFloor) / 450) * 100);
   const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId));
   const forgeFiles = useMemo(() => forgeProjectFiles(completed, codes), [completed, codes]);
+  const quickQuizItem = quickQuizItems[quickQuizStep];
+  const quickQuizAnswer = quickQuizAnswers[quickQuizStep];
+  const quickQuizAnswered = quickQuizAnswer !== undefined;
 
   const openQuest = (index: number) => {
-    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false);
+    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
     requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -1830,6 +1857,8 @@ export default function Home() {
         if (saved.quizAnswers) setQuizAnswers(saved.quizAnswers);
         if (saved.notes) setNotes(saved.notes);
         if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
+        if (Number.isInteger(saved.quickQuizBest)) setQuickQuizBest(Math.max(0, Math.min(5, saved.quickQuizBest)));
+        if (Number.isInteger(saved.quickQuizRuns)) setQuickQuizRuns(Math.max(0, saved.quickQuizRuns));
       } catch { /* local progress must never block the course */ }
       setHydrated(true);
     });
@@ -1837,11 +1866,79 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ completed, codes, quizAnswers, notes, lessonMode }));
-  }, [completed, codes, quizAnswers, notes, lessonMode, hydrated]);
+    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns }));
+  }, [completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, hydrated]);
+
+  const openQuickQuiz = () => {
+    setNavOpen(false);
+    setForgeOpen(false);
+    setQuickQuizPhase("ready");
+    setQuickQuizOpen(true);
+  };
+
+  const startQuickQuiz = () => {
+    const pool = quickQuizScope === "all" ? [...quests] : quests.filter(item => completed.includes(item.id));
+    if (quickQuizScope === "path") {
+      const nextIndex = quests.findIndex(item => !completed.includes(item.id));
+      const frontier = quests.slice(0, Math.max(5, nextIndex === -1 ? quests.length : nextIndex + 1));
+      frontier.forEach(item => { if (!pool.some(entry => entry.id === item.id)) pool.push(item); });
+      quests.forEach(item => { if (pool.length < 5 && !pool.some(entry => entry.id === item.id)) pool.push(item); });
+    }
+    const kindOffset = Math.floor(Math.random() * 3);
+    const items = shuffled(pool).slice(0, 5).map((item, index) => ({
+      questId: item.id,
+      questIndex: quests.findIndex(questItem => questItem.id === item.id),
+      world: item.world,
+      questTitle: item.title,
+      quiz: quizSetFor(item)[(index + kindOffset) % 3],
+    }));
+    setQuickQuizItems(items);
+    setQuickQuizStep(0);
+    setQuickQuizAnswers([]);
+    setQuickQuizScore(0);
+    setQuickQuizStreak(0);
+    setQuickQuizRunBestStreak(0);
+    setQuickQuizPhase("playing");
+  };
+
+  const answerQuickQuiz = (optionIndex: number) => {
+    if (!quickQuizItem || quickQuizAnswered || quickQuizPhase !== "playing") return;
+    setQuickQuizAnswers(current => {
+      const next = [...current];
+      next[quickQuizStep] = optionIndex;
+      return next;
+    });
+    if (optionIndex === quickQuizItem.quiz.answer) {
+      setQuickQuizScore(value => value + 1);
+      const nextStreak = quickQuizStreak + 1;
+      setQuickQuizStreak(nextStreak);
+      setQuickQuizRunBestStreak(best => Math.max(best, nextStreak));
+    } else {
+      setQuickQuizStreak(0);
+    }
+  };
+
+  const advanceQuickQuiz = () => {
+    if (!quickQuizAnswered) return;
+    if (quickQuizStep < quickQuizItems.length - 1) {
+      setQuickQuizStep(value => value + 1);
+      return;
+    }
+    const finalScore = quickQuizItems.reduce((score, item, index) => score + (quickQuizAnswers[index] === item.quiz.answer ? 1 : 0), 0);
+    setQuickQuizScore(finalScore);
+    setQuickQuizBest(value => Math.max(value, finalScore));
+    setQuickQuizRuns(value => value + 1);
+    setQuickQuizPhase("result");
+  };
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
+      if (quickQuizOpen) {
+        if (event.key === "Escape") setQuickQuizOpen(false);
+        else if (quickQuizPhase === "playing" && !quickQuizAnswered && /^[1-4]$/.test(event.key)) answerQuickQuiz(Number(event.key) - 1);
+        else if (quickQuizPhase === "playing" && quickQuizAnswered && event.key === "Enter") advanceQuickQuiz();
+        return;
+      }
       if (event.key === "Escape") { setNavOpen(false); setForgeOpen(false); setGlossaryOpen(false); }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && view === "quest") { event.preventDefault(); setChecked(true); if (!allChecksPass) setHintOpen(true); }
       if (event.altKey && event.key === "ArrowRight") openQuest(Math.min(questIndex + 1, quests.length - 1));
@@ -1883,7 +1980,7 @@ export default function Home() {
   };
 
   const exportProgress = () => {
-    const payload = JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), completed, codes, quizAnswers, notes, lessonMode }, null, 2);
+    const payload = JSON.stringify({ version: 4, exportedAt: new Date().toISOString(), completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns }, null, 2);
     downloadBlob(new Blob([payload], { type: "application/json" }), "qml-shellcraft-progress.json");
   };
 
@@ -1899,6 +1996,8 @@ export default function Home() {
       if (saved.quizAnswers && typeof saved.quizAnswers === "object") setQuizAnswers(saved.quizAnswers);
       if (saved.notes && typeof saved.notes === "object") setNotes(saved.notes);
       if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
+      if (Number.isInteger(saved.quickQuizBest)) setQuickQuizBest(Math.max(0, Math.min(5, saved.quickQuizBest)));
+      if (Number.isInteger(saved.quickQuizRuns)) setQuickQuizRuns(Math.max(0, saved.quickQuizRuns));
       setImportStatus("Progress restored on this device.");
     } catch {
       setImportStatus("That file is not a valid Shellcraft progress export.");
@@ -2005,10 +2104,10 @@ export default function Home() {
       <header className="hud">
         <button className="brand" onClick={() => setView("map")} aria-label="Open world map"><CoreMark level={level} /><span><b>QML SHELLCRAFT</b><small>zero → hero adventure</small></span></button>
         <nav><button className={view === "map" ? "active" : ""} onClick={() => setView("map")}>World map</button><button className={view === "quest" ? "active" : ""} onClick={() => setView("quest")}>Current quest</button>{view === "quest" && <span className="mode-switcher" aria-label="Lesson focus mode">{(["learn", "split", "build"] as LessonMode[]).map(mode => <button key={mode} className={lessonMode === mode ? "selected" : ""} onClick={() => setLessonMode(mode)} aria-pressed={lessonMode === mode}>{mode}</button>)}</span>}</nav>
-        <div className="player-hud"><span className="rank-chip"><i>LV {level}</i><b>{rank}</b></span><div className="xp-mini"><span><i style={{ width: `${levelProgress}%` }} /></span><small>{xp.toLocaleString("en-US")} XP</small></div><button className="forge-trigger" onClick={() => setForgeOpen(true)}><i>FG</i><span>Forge</span><b>{unlockedArtifacts.length}</b></button><button className="nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open quest navigator">{quests.length} quests <i>⌘</i></button></div>
+        <div className="player-hud"><span className="rank-chip"><i>LV {level}</i><b>{rank}</b></span><div className="xp-mini"><span><i style={{ width: `${levelProgress}%` }} /></span><small>{xp.toLocaleString("en-US")} XP</small></div><button className="quiz-trigger" onClick={openQuickQuiz}><i>Q5</i><span>Quiz</span><b>{quickQuizBest}/5</b></button><button className="forge-trigger" onClick={() => setForgeOpen(true)}><i>FG</i><span>Forge</span><b>{unlockedArtifacts.length}</b></button><button className="nav-trigger" onClick={() => setNavOpen(true)} aria-label="Open quest navigator">{quests.length} quests <i>⌘</i></button></div>
       </header>
 
-      {view === "map" ? <MapView completed={completed} onOpenQuest={openQuest} onOpenForge={() => setForgeOpen(true)} /> : (
+      {view === "map" ? <MapView completed={completed} onOpenQuest={openQuest} onOpenForge={() => setForgeOpen(true)} onOpenQuickQuiz={openQuickQuiz} /> : (
         <div className={`quest-view mode-${lessonMode}`}>
           <aside className="quest-rail">
             <button className="back-map" onClick={() => setView("map")}><i>←</i><span>World map</span></button>
@@ -2093,6 +2192,40 @@ export default function Home() {
           </aside>
         </div>
       )}
+
+      {quickQuizOpen && <div className="quick-quiz-backdrop"><button className="quick-quiz-dismiss" onClick={() => setQuickQuizOpen(false)} aria-label="Close quick quiz" /><section className={`quick-quiz quick-quiz-${quickQuizPhase}`} role="dialog" aria-modal="true" aria-label="Quick quiz">
+        <header className="quick-quiz-header"><div className="quick-quiz-mark"><i /><i /><b>Q5</b></div><div><small>CORE DRILL · PRACTICE MODE</small><h2>Quick quiz</h2><p>Five signals. Two minutes. Find the idea that needs another look.</p></div><button onClick={() => setQuickQuizOpen(false)} aria-label="Close quick quiz">×</button></header>
+
+        {quickQuizPhase === "ready" && <div className="quick-quiz-ready">
+          <div className="quick-quiz-intro"><span className="pulse-orbit"><i /><i /><b /></span><div><small>HOW IT WORKS</small><h3>Wake the Core in five moves.</h3><p>Each run mixes mental models, code detective work, and design transfer. Answers appear immediately; mistakes become links back to the exact lesson.</p></div></div>
+          <div className="quick-quiz-scope" aria-label="Quiz question pool"><button className={quickQuizScope === "path" ? "selected" : ""} onClick={() => setQuickQuizScope("path")} aria-pressed={quickQuizScope === "path"}><i>PATH</i><span><b>My journey</b><small>{completed.length ? "Review mastered and nearby concepts" : "Begin with the first world"}</small></span></button><button className={quickQuizScope === "all" ? "selected" : ""} onClick={() => setQuickQuizScope("all")} aria-pressed={quickQuizScope === "all"}><i>∞</i><span><b>All worlds</b><small>Pull from the complete curriculum</small></span></button></div>
+          <div className="quick-quiz-worlds" aria-hidden="true">{worlds.map((world, index) => <span key={world.name} className={`world-${world.color}`}><WorldGlyph index={index} /><i /></span>)}</div>
+          <div className="quick-quiz-record"><span><small>PERSONAL BEST</small><b>{quickQuizBest}/5</b></span><span><small>RUNS FINISHED</small><b>{quickQuizRuns}</b></span><em>Practice only · quest XP stays honest</em></div>
+          <button className="quick-quiz-start" onClick={startQuickQuiz}><span>Start the signal run</span><i>1–4 answer · Enter advances</i><b>→</b></button>
+        </div>}
+
+        {quickQuizPhase === "playing" && quickQuizItem && <div className="quick-quiz-play">
+          <div className="quick-quiz-runbar"><div className="quick-quiz-segments">{quickQuizItems.map((item, index) => <i key={item.questId} className={index < quickQuizStep ? (quickQuizAnswers[index] === item.quiz.answer ? "correct" : "wrong") : index === quickQuizStep ? "current" : ""} />)}</div><span><small>SCORE</small><b>{quickQuizScore}</b></span><span className={quickQuizStreak > 1 ? "hot" : ""}><small>STREAK</small><b>{quickQuizStreak > 1 ? `×${quickQuizStreak}` : "—"}</b></span></div>
+          <article className={`quick-quiz-card world-${worlds[quickQuizItem.world].color}`}>
+            <div className="quick-quiz-context"><WorldGlyph index={quickQuizItem.world} /><span><small>{worlds[quickQuizItem.world].name} · {quickQuizItem.quiz.kind}</small><b>{quickQuizItem.questTitle}</b></span><em>{quickQuizStep + 1}/5</em></div>
+            <h3>{quickQuizItem.quiz.question}</h3>
+            <div className="quick-quiz-options">{quickQuizItem.quiz.options.map((option, optionIndex) => {
+              const correctOption = quickQuizAnswered && optionIndex === quickQuizItem.quiz.answer;
+              const wrongOption = quickQuizAnswered && optionIndex === quickQuizAnswer && !correctOption;
+              return <button key={`${optionIndex}-${option}`} className={correctOption ? "correct" : wrongOption ? "wrong" : ""} onClick={() => answerQuickQuiz(optionIndex)} disabled={quickQuizAnswered}><i>{optionIndex + 1}</i><span>{option}</span><b>{correctOption ? "✓" : wrongOption ? "×" : ""}</b></button>;
+            })}</div>
+            {quickQuizAnswered && <aside className={quickQuizAnswer === quickQuizItem.quiz.answer ? "correct" : "wrong"} aria-live="polite"><span>{quickQuizAnswer === quickQuizItem.quiz.answer ? "SIGNAL LOCKED" : "SIGNAL MISSED"}</span><p>{quickQuizItem.quiz.explanation}</p></aside>}
+          </article>
+          <footer><span>{quickQuizAnswered ? "Use the explanation, then move on." : "Press 1–4 or choose an answer."}</span><button onClick={advanceQuickQuiz} disabled={!quickQuizAnswered}>{quickQuizStep === 4 ? "See results" : "Next signal"}<i>↵</i></button></footer>
+        </div>}
+
+        {quickQuizPhase === "result" && <div className="quick-quiz-result">
+          <div className="quick-quiz-score" style={{ "--quiz-score": `${quickQuizScore * 72}deg` } as React.CSSProperties}><span><b>{quickQuizScore}</b><small>OUT OF 5</small></span></div>
+          <div className="quick-quiz-verdict"><small>RUN COMPLETE · BEST STREAK ×{quickQuizRunBestStreak}</small><h3>{quickQuizScore === 5 ? "Shell intuition online." : quickQuizScore >= 4 ? "Signal strength: excellent." : quickQuizScore >= 3 ? "The Core is stabilizing." : "Good—now we know where to train."}</h3><p>{quickQuizScore === 5 ? "Every mental model held. Try all worlds for a harder mix." : `${5 - quickQuizScore} signal${5 - quickQuizScore === 1 ? "" : "s"} need another pass. Review them now or reshuffle for a fresh run.`}</p><div><span><small>BEST</small><b>{Math.max(quickQuizBest, quickQuizScore)}/5</b></span><span><small>QUESTIONS</small><b>5</b></span><span><small>TIMEBOX</small><b>~2m</b></span></div></div>
+          <section className="quick-quiz-review"><header><span>REVIEW QUEUE</span><small>{quickQuizScore === 5 ? "No weak links detected" : "Turn misses into map coordinates"}</small></header>{quickQuizItems.map((item, index) => ({ item, index })).filter(({ item, index }) => quickQuizAnswers[index] !== item.quiz.answer).map(({ item, index }) => <button key={`${item.questId}-${index}`} onClick={() => openQuest(item.questIndex)}><i>{index + 1}</i><span><b>{item.questTitle}</b><small>{item.quiz.explanation}</small></span><em>Open lesson →</em></button>)}{quickQuizScore === 5 && <div className="quick-quiz-perfect"><i>✓</i><span><b>Clean run</b><small>No review queue this time.</small></span></div>}</section>
+          <div className="quick-quiz-result-actions"><button onClick={() => setQuickQuizOpen(false)}>Back to course</button><button onClick={startQuickQuiz}>Shuffle and replay <i>↻</i></button></div>
+        </div>}
+      </section></div>}
 
       {forgeOpen && <div className="forge-backdrop"><button className="forge-dismiss" onClick={() => setForgeOpen(false)} aria-label="Close the Forge" /><aside className="forge-panel" role="dialog" aria-modal="true" aria-label="Shell Forge project">
         <header><div className="forge-panel-mark"><i /><i /><b>FG</b></div><div><small>CUMULATIVE PROJECT</small><h2>Shell Forge</h2><p>Every mastered system becomes a reusable part of your real shell.</p></div><button onClick={() => setForgeOpen(false)} aria-label="Close the Forge">×</button></header>
