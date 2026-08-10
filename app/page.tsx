@@ -1883,7 +1883,7 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
           })}
         </nav>
         <div className={`illustrated-map ${selectedCampaign === 1 ? "map-wide" : "map-atlas"} ${campaignWorlds.every(world => isWorldComplete(world.index, completedSet)) ? "map-cleared" : ""}`}>
-          <img src={campaignImages[selectedCampaign]} alt={`Illustrated ${campaign.name} map with six connected regions`} />
+          <img key={selectedCampaign} src={campaignImages[selectedCampaign]} alt={`Illustrated ${campaign.name} map with six connected regions`} />
           <span className="map-instruction">{campaignWorlds.every(world => isWorldComplete(world.index, completedSet)) ? "Map fully awakened" : "Follow the illuminated route"}</span>
           <div className="map-lights" aria-hidden="true">
             {campaignWorlds.map(world => {
@@ -1918,7 +1918,7 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
           })}
           {lockNotice && <span className="atlas-lock-notice" role="status"><i><span className="lock-rune" /></i><b>PATH SEALED</b><small>{lockNotice}</small></span>}
         </div>
-        <article className={`region-drawer world-${activeWorld.color}`}>
+        <article key={selectedWorld} className={`region-drawer world-${activeWorld.color}`}>
           <img src={activeWorld.image} alt={`${activeWorld.name} illustrated region`} />
           <div className="region-copy">
             <div className={`region-state ${activeWorldComplete ? "cleared" : activeWorldIsNext ? "current" : "unlocked"}`}><i /><span><b>{activeWorldComplete ? "REGION CLEARED" : activeWorldIsNext ? "ACTIVE DESTINATION" : "REGION UNLOCKED"}</b><small>{activeQuests.filter(quest => completedSet.has(quest.id)).length}/{activeQuests.length} quest sigils lit</small></span></div>
@@ -2033,6 +2033,32 @@ export default function Home() {
   useEffect(() => {
     if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ version: 5, completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, mastery }));
   }, [completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, mastery, hydrated]);
+
+  useEffect(() => {
+    const selector = view === "map"
+      ? ".map-view > section"
+      : ".quest-rail, .lesson-body > header, .lesson-body > section, .lab-dock > section";
+    const targets = Array.from(document.querySelectorAll<HTMLElement>(selector));
+    targets.forEach((target, index) => {
+      target.classList.add("motion-reveal");
+      target.style.setProperty("--reveal-delay", `${Math.min(index, 5) * 42}ms`);
+    });
+
+    if (!("IntersectionObserver" in window)) {
+      targets.forEach(target => target.classList.add("in-view"));
+      return;
+    }
+
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("in-view");
+        observer.unobserve(entry.target);
+      });
+    }, { threshold: .08, rootMargin: "0px 0px -4%" });
+    targets.forEach(target => observer.observe(target));
+    return () => observer.disconnect();
+  }, [view, questIndex, lessonMode]);
 
   const openQuickQuiz = () => {
     setNavOpen(false);
@@ -2309,7 +2335,7 @@ export default function Home() {
       </header>
 
       {view === "map" ? <MapView completed={completed} onOpenQuest={openQuest} onOpenForge={() => setForgeOpen(true)} onOpenQuickQuiz={openQuickQuiz} /> : (
-        <div className={`quest-view mode-${lessonMode}`}>
+        <div key={quest.id} className={`quest-view mode-${lessonMode}`}>
           <aside className="quest-rail">
             <button className="back-map" onClick={() => setView("map")}><i>←</i><span>World map</span></button>
             <div className="rail-world"><WorldGlyph index={quest.world} /><small>{worlds[quest.world].eyebrow}</small><b>{worlds[quest.world].name}</b><span>{journeyPosition + 1} / {quests.length}</span></div>
@@ -2389,7 +2415,7 @@ export default function Home() {
               <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}{checked && !checkResults[index] && <small>{check.hint}</small>}</span></div>)}</div>
               {hintOpen && <aside className="hint"><b>CORE CLUE</b>{quest.checks.find((_, index) => !checkResults[index])?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}</aside>}
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
-              <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
+              <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className={`claim-quest ${completed.includes(quest.id) ? "mastered" : "ready"}`} onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
             </section>
             <footer><button disabled={previousJourneyIndex === undefined} onClick={() => previousJourneyIndex !== undefined && openQuest(previousJourneyIndex)}>←</button><span>{nextJourneyIndex !== undefined && !isQuestUnlocked(nextJourneyIndex, completedSet) ? "Master this quest to open the route" : "Alt + arrows navigate"}</span><button disabled={nextJourneyIndex === undefined || !isQuestUnlocked(nextJourneyIndex, completedSet)} onClick={() => nextJourneyIndex !== undefined && openQuest(nextJourneyIndex)}>→</button></footer>
           </aside>
@@ -2409,7 +2435,7 @@ export default function Home() {
 
         {quickQuizPhase === "playing" && quickQuizItem && <div className="quick-quiz-play">
           <div className="quick-quiz-runbar"><div className="quick-quiz-segments">{quickQuizItems.map((item, index) => <i key={`${item.questId}-${index}`} className={index < quickQuizStep ? (quickQuizAnswers[index] === item.quiz.answer ? "correct" : "wrong") : index === quickQuizStep ? "current" : ""} />)}</div><span><small>SCORE</small><b>{quickQuizScore}</b></span><span className={quickQuizStreak > 1 ? "hot" : ""}><small>STREAK</small><b>{quickQuizStreak > 1 ? `×${quickQuizStreak}` : "—"}</b></span></div>
-          <article className={`quick-quiz-card world-${worlds[quickQuizItem.world].color}`}>
+          <article key={quickQuizStep} className={`quick-quiz-card world-${worlds[quickQuizItem.world].color}`}>
             <div className="quick-quiz-context"><WorldGlyph index={quickQuizItem.world} /><span><small>{worlds[quickQuizItem.world].name} · {quickQuizItem.quiz.kind}</small><b>{quickQuizItem.questTitle}</b></span><em>{quickQuizStep + 1}/5</em></div>
             <h3>{quickQuizItem.quiz.question}</h3>
             <div className="quick-quiz-options">{quickQuizItem.quiz.options.map((option, optionIndex) => {

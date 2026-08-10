@@ -230,6 +230,10 @@ test("keeps the interactive course UI, generated atlas art, and production metad
   assert.match(page, /NEW REGION UNLOCKED/);
   assert.match(page, /NEW MAP UNLOCKED/);
   assert.match(page, /PATH SEALED/);
+  assert.match(page, /IntersectionObserver/);
+  assert.match(page, /motion-reveal/);
+  assert.match(page, /key=\{selectedCampaign\}/);
+  assert.match(page, /claim-quest.*ready/);
 
   assert.match(css, /\.world-map/);
   assert.match(css, /\.campaign-selector/);
@@ -247,6 +251,11 @@ test("keeps the interactive course UI, generated atlas art, and production metad
   assert.match(css, /\.map-shroud/);
   assert.match(css, /\.lock-rune/);
   assert.match(css, /\.atlas-lock-notice/);
+  assert.match(css, /--motion-spatial/);
+  assert.match(css, /atlas-image-enter/);
+  assert.match(css, /signal-lock/);
+  assert.match(css, /forge-charge/);
+  assert.match(css, /core-blink/);
   assert.match(css, /prefers-reduced-motion/);
 
   mapBuffers.forEach((buffer, index) => {

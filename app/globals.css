@@ -24,6 +24,15 @@
   --r-control: 16px;
   --r-sheet: 24px;
   --r-world: 32px;
+  --motion-immediate: 130ms;
+  --motion-fast: 210ms;
+  --motion-exit: 220ms;
+  --motion-enter: 380ms;
+  --motion-spatial: 460ms;
+  --motion-large: 620ms;
+  --ease-arrive: cubic-bezier(.18,.84,.24,1);
+  --ease-spring: cubic-bezier(.18,.9,.2,1.12);
+  --ease-exit: cubic-bezier(.4,0,1,1);
   --font: "SF Pro Rounded", "SF Pro Display", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", ui-monospace, monospace;
 }
@@ -302,8 +311,93 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 3px
 @media (max-width: 720px) { .map-light { width: 31%; }.map-shroud { width: 39%; }.atlas-lock-notice { left: 12px; right: 12px; bottom: 12px; max-width: none; }.region-state { margin-bottom: 12px; } }
 @media (max-width: 640px) { .forge-file-browser { height: 540px; grid-template-columns: 1fr; grid-template-rows: 150px 1fr; }.forge-file-browser > nav { border-right: 0; border-bottom: 1px solid var(--line); }.forge-file-browser > article { min-height: 0; } }
 
+/* Playful motion language: state change, spatial cause, then reward. */
+.motion-reveal { opacity: 0; transform: translateY(22px) scale(.985); transition: opacity var(--motion-enter) var(--ease-arrive), transform var(--motion-spatial) var(--ease-arrive); transition-delay: var(--reveal-delay, 0ms); }
+.motion-reveal.in-view { opacity: 1; transform: translateY(0) scale(1); }
+
+.brand .core-mark, .hud button, .quiz-trigger > i, .forge-trigger > i { transition: transform var(--motion-fast) var(--ease-spring), box-shadow var(--motion-fast) var(--ease-arrive), border-color var(--motion-fast) ease, background var(--motion-fast) ease, color var(--motion-fast) ease; }
+.brand:hover .core-mark { transform: rotate(calc((var(--level) - 1) * 3deg)) scale(1.07); box-shadow: inset 0 0 0 2px rgba(255,255,255,.22), 0 7px 0 #5d4acb, 0 0 22px rgba(171,154,255,.28); }
+.brand:active .core-mark { transform: rotate(calc((var(--level) - 1) * 3deg)) scale(.94); }
+.hud > nav button.active, .mode-switcher button.selected { animation: tab-snap var(--motion-fast) var(--ease-spring); }
+.quiz-trigger:hover > i { transform: rotate(-5deg) scale(1.08); }.forge-trigger:hover > i { transform: rotate(5deg) scale(1.08); }
+.primary-cta i, .quick-quiz-cta > em, .forge-ribbon > button i { transition: transform var(--motion-fast) var(--ease-spring); }
+.primary-cta:hover i, .quick-quiz-cta:hover > em, .forge-ribbon > button:hover i { transform: translateX(6px); }
+.eyebrow > i { animation: quest-spark 3.6s ease-in-out infinite; }
+.hero-core::before { animation: core-halo-morph 9s ease-in-out infinite alternate; }
+.hero-core .core-mark > i { animation: core-spark 2.8s ease-in-out infinite; }.hero-core .core-mark > i:nth-child(2) { animation-delay: -.9s; }.hero-core .core-mark > i:nth-child(3) { animation-delay: -1.8s; }
+
+.learning-loop.learning-loop-expanded > div { position: relative; overflow: hidden; transition: transform var(--motion-fast) var(--ease-spring), background var(--motion-fast) ease; }
+.learning-loop.learning-loop-expanded > div::after { content: ""; position: absolute; left: 9px; right: 9px; bottom: 0; height: 2px; border-radius: 2px; background: var(--violet); transform: scaleX(0); transform-origin: left; transition: transform var(--motion-spatial) var(--ease-arrive); }
+.learning-loop.learning-loop-expanded > div:hover { transform: translateY(-4px) rotate(-.35deg); background: var(--night-3); }
+.learning-loop.learning-loop-expanded > div:hover::after { transform: scaleX(1); }
+.learning-loop.learning-loop-expanded > div:hover i { animation: loop-token var(--motion-spatial) var(--ease-spring); }
+.execution-ladder > span { transition: background var(--motion-fast) ease, transform var(--motion-fast) var(--ease-spring); }.execution-ladder > span:hover { z-index: 1; background: var(--night-3); transform: translateY(-3px); }.execution-ladder > span:hover i { animation: loop-token var(--motion-spatial) var(--ease-spring); }
+.forge-ribbon, .forge-ribbon-mark { transition: transform var(--motion-spatial) var(--ease-spring), box-shadow var(--motion-spatial) var(--ease-arrive); }.forge-ribbon:hover .forge-ribbon-mark { transform: rotate(3deg) translateY(-4px); box-shadow: 0 10px 0 #8b681c, 0 0 26px rgba(255,209,118,.2); }.forge-ribbon-mark i, .forge-panel-mark i { animation: forge-ember 2.8s ease-in-out infinite; }.forge-ribbon-mark i:nth-child(2), .forge-panel-mark i:nth-child(2) { animation-delay: -1.4s; }
+
+.illustrated-map > img { animation: atlas-image-enter var(--motion-large) var(--ease-arrive) both; }
+.campaign-selector button.selected > i { animation: map-token-awaken var(--motion-spatial) var(--ease-spring); }
+.map-node.selected > i, .map-node.cleared > i { animation: map-token-awaken var(--motion-spatial) var(--ease-spring); }
+.map-node > i, .region-quests button > i { transition: transform var(--motion-fast) var(--ease-spring), box-shadow var(--motion-fast) ease; }
+.map-node:not(.locked):hover > i, .region-quests button:not(.locked):hover > i { transform: rotate(-5deg) scale(1.1); }
+.region-drawer { animation: region-drawer-enter var(--motion-spatial) var(--ease-arrive) both; }
+.region-drawer > img { animation: region-image-settle var(--motion-large) var(--ease-arrive) both; }
+.region-quests button { transition: transform var(--motion-fast) var(--ease-spring), border-color var(--motion-fast) ease, background var(--motion-fast) ease; }.region-quests button:not(.locked):hover { transform: translateY(-3px); }
+.region-state > i { animation: region-state-awaken var(--motion-spatial) var(--ease-spring); }
+
+.companion-face { transform-origin: 50% 80%; transition: transform var(--motion-fast) var(--ease-spring), box-shadow var(--motion-fast) ease; }.story-callout:hover .companion-face, .rail-companion:hover .companion-face { transform: translateY(-3px) rotate(-3deg); box-shadow: 0 7px 0 #5947bd, 0 0 20px rgba(171,154,255,.2); }
+.companion-face i { transform-origin: center; animation: core-blink 5.2s linear infinite; }.companion-face i:nth-child(2) { animation-delay: 80ms; }
+.in-view .section-title > span { animation: section-sigil-in var(--motion-spatial) var(--ease-spring) both; }
+.rule-grid > div, .glossary-button, .notes-section > button { transition: transform var(--motion-fast) var(--ease-spring), border-color var(--motion-fast) ease, background var(--motion-fast) ease; }.rule-grid > div:hover { transform: translateY(-4px); border-color: var(--violet); }.glossary-button:hover, .notes-section > button:hover { transform: translateX(3px); }
+.lesson-world-art img, .mission-card img, .quick-quiz-art img, .forge-vista img { transition: transform var(--motion-large) var(--ease-arrive); }.lesson-world-art:hover img, .mission-card:hover img, .quick-quiz-art:hover img { transform: scale(1.035); }
+
+.quiz-card.correct { animation: signal-lock var(--motion-spatial) var(--ease-spring); }.quiz-card.incorrect { animation: signal-miss var(--motion-enter) ease; }
+.quiz-card button, .quick-quiz-options > button { transition: transform var(--motion-fast) var(--ease-spring), border-color var(--motion-fast) ease, background var(--motion-fast) ease, color var(--motion-fast) ease; }
+.quiz-card button:not(.selected):hover { transform: translateY(-2px); }.quiz-card button.selected i, .quick-quiz-options button.correct > i { animation: answer-token var(--motion-spatial) var(--ease-spring); }
+.quiz-card > aside, .quick-quiz-card > aside { animation: answer-reveal var(--motion-enter) var(--ease-arrive) both; }
+.quick-quiz-card { animation: quiz-card-deal var(--motion-enter) var(--ease-arrive) both; }
+.quick-quiz-options button.correct { animation: signal-lock var(--motion-spatial) var(--ease-spring); }.quick-quiz-options button.wrong { animation: signal-miss var(--motion-enter) ease; }
+.quick-quiz-segments i { transition: transform var(--motion-fast) var(--ease-spring), background var(--motion-fast) ease, box-shadow var(--motion-fast) ease; }.quick-quiz-segments i.correct, .quick-quiz-segments i.wrong { transform: scaleY(1.45); }
+.quick-quiz-score { animation: score-awaken var(--motion-large) var(--ease-spring) both; }.quick-quiz-perfect > i { animation: answer-token var(--motion-spatial) var(--ease-spring); }
+
+.checks > div { transition: transform var(--motion-fast) var(--ease-spring), background var(--motion-fast) ease; }.checks > div.pass { animation: gate-pass var(--motion-spatial) var(--ease-spring); }.checks > div.fail { animation: gate-fail var(--motion-enter) ease; }
+.checks > div.pass i { animation: answer-token var(--motion-spatial) var(--ease-spring); }
+.run-checks, .claim-quest, .forge-actions button, .quick-quiz-start, .quick-quiz-play footer button { transition: transform var(--motion-fast) var(--ease-spring), box-shadow var(--motion-fast) var(--ease-arrive); }.run-checks:hover, .claim-quest:hover, .forge-actions button:hover, .quick-quiz-play footer button:not(:disabled):hover { transform: translateY(-2px); }.claim-quest.ready { animation: quest-ready 2.2s ease-in-out infinite; }
+
+.forge-progress span i { background-size: 200% 100%; animation: forge-charge var(--motion-large) var(--ease-arrive) both, forge-flow 3.4s linear infinite; }
+.forge-vista img { animation: forge-vista-awaken 7s var(--ease-arrive) both; }
+.artifact-grid > button { transition: transform var(--motion-fast) var(--ease-spring), border-color var(--motion-fast) ease; }.artifact-grid button.unlocked > i { animation: artifact-awaken var(--motion-spatial) var(--ease-spring) both; }.artifact-grid > button:hover > i { transform: rotate(-5deg) scale(1.08); }
+.navigator { animation: compass-enter var(--motion-spatial) var(--ease-spring) both; }
+
+@keyframes tab-snap { 0% { transform: scale(.9); } 70% { transform: scale(1.05); } to { transform: scale(1); } }
+@keyframes quest-spark { 0%,84%,100% { transform: rotate(45deg) scale(1); box-shadow: none; } 90% { transform: rotate(135deg) scale(1.4); box-shadow: 0 0 14px var(--lime); } }
+@keyframes core-halo-morph { from { border-radius: 48% 52% 42% 58%; transform: rotate(-12deg) scale(1); } to { border-radius: 56% 44% 58% 42%; transform: rotate(-5deg) scale(1.035); } }
+@keyframes core-spark { 0%,100% { transform: scale(.82); opacity: .68; } 50% { transform: scale(1.25); opacity: 1; box-shadow: 0 0 13px currentColor; } }
+@keyframes loop-token { 45% { transform: rotate(-8deg) scale(1.15); } 72% { transform: rotate(4deg) scale(1.05); } }
+@keyframes forge-ember { 0%,100% { transform: scale(.8); opacity: .62; } 50% { transform: scale(1.25); opacity: 1; } }
+@keyframes atlas-image-enter { from { opacity: .3; transform: scale(1.055); } to { opacity: 1; transform: scale(1); } }
+@keyframes map-token-awaken { 0% { transform: scale(.55) rotate(-12deg); } 68% { transform: scale(1.18) rotate(4deg); } to { transform: scale(1) rotate(0); } }
+@keyframes region-drawer-enter { from { opacity: 0; transform: translateY(-14px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@keyframes region-image-settle { from { transform: scale(1.07); } to { transform: scale(1); } }
+@keyframes region-state-awaken { 0% { transform: scale(0); } 72% { transform: scale(1.5); } to { transform: scale(1); } }
+@keyframes core-blink { 0%,45%,49%,100% { transform: scaleY(1); } 47% { transform: scaleY(.12); } }
+@keyframes section-sigil-in { from { opacity: 0; transform: rotate(-10deg) scale(.65); } to { opacity: 1; transform: rotate(0) scale(1); } }
+@keyframes signal-lock { 35% { transform: translateY(-3px) scale(1.008); } 70% { transform: translateY(1px) scale(.998); } }
+@keyframes signal-miss { 25% { transform: translateX(-4px); } 50% { transform: translateX(3px); } 75% { transform: translateX(-2px); } }
+@keyframes answer-token { 0% { transform: scale(.55) rotate(-10deg); } 65% { transform: scale(1.18) rotate(5deg); } to { transform: scale(1) rotate(0); } }
+@keyframes answer-reveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes quiz-card-deal { from { opacity: 0; transform: translateX(18px) rotate(.5deg); } to { opacity: 1; transform: translateX(0) rotate(0); } }
+@keyframes score-awaken { from { opacity: 0; transform: rotate(-35deg) scale(.72); } to { opacity: 1; transform: rotate(0) scale(1); } }
+@keyframes gate-pass { 40% { transform: translateX(4px); background: rgba(186,255,117,.1); } }.checks > div.fail { transform-origin: left; } @keyframes gate-fail { 35% { transform: translateX(3px); } 65% { transform: translateX(-2px); } }
+@keyframes quest-ready { 0%,100% { box-shadow: 0 4px 0 #638b37, 0 0 0 0 rgba(186,255,117,.25); } 50% { box-shadow: 0 5px 0 #638b37, 0 0 0 7px transparent; } }
+@keyframes forge-charge { from { width: 0; } }
+@keyframes forge-flow { to { background-position: -200% 0; } }
+@keyframes forge-vista-awaken { from { transform: scale(1.09); } to { transform: scale(1.015); } }
+@keyframes artifact-awaken { from { opacity: .45; transform: scale(.62) rotate(-8deg); } to { opacity: 1; transform: scale(1) rotate(0); } }
+@keyframes compass-enter { from { opacity: 0; transform: translateY(-18px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  .motion-reveal { opacity: 1 !important; transform: none !important; }
 }
 
 /* Focus modes and density correction */
