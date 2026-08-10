@@ -1539,6 +1539,48 @@ const quests: Quest[] = [...legacyQuests.map(quest => ({
   executionTier: quest.executionTier ?? (quest.id === "validation-capstone" ? "runtime" : quest.world >= 3 ? "static" : "browser"),
 })), ...atlasExpansionQuests];
 
+const questIndexesByWorld = worlds.map((_, worldIndex) => quests
+  .map((quest, questIndex) => ({ quest, questIndex }))
+  .filter(({ quest }) => quest.world === worldIndex)
+  .map(({ questIndex }) => questIndex));
+
+const journeyQuestIndexes = questIndexesByWorld.flat();
+const journeyPositionByQuestIndex = new Map(journeyQuestIndexes.map((questIndex, position) => [questIndex, position]));
+
+function isWorldComplete(worldIndex: number, completed: Set<string>): boolean {
+  const worldQuestIndexes = questIndexesByWorld[worldIndex] ?? [];
+  return worldQuestIndexes.length > 0 && worldQuestIndexes.every(index => completed.has(quests[index].id));
+}
+
+function isWorldUnlocked(worldIndex: number, completed: Set<string>): boolean {
+  const worldQuestIndexes = questIndexesByWorld[worldIndex] ?? [];
+  if (worldQuestIndexes.some(index => completed.has(quests[index].id))) return true;
+  return worldIndex === 0 || isWorldComplete(worldIndex - 1, completed);
+}
+
+function isQuestUnlocked(questIndex: number, completed: Set<string>): boolean {
+  const target = quests[questIndex];
+  if (!target || completed.has(target.id)) return Boolean(target);
+  const worldQuestIndexes = questIndexesByWorld[target.world] ?? [];
+  const localPosition = worldQuestIndexes.indexOf(questIndex);
+  if (localPosition <= 0) return isWorldUnlocked(target.world, completed);
+  return completed.has(quests[worldQuestIndexes[localPosition - 1]].id);
+}
+
+function isCampaignUnlocked(campaignNumber: number, completed: Set<string>): boolean {
+  const firstWorld = worlds.findIndex(world => world.campaign === campaignNumber);
+  if (firstWorld === -1) return false;
+  const campaignQuestIndexes = worlds
+    .map((world, worldIndex) => ({ world, worldIndex }))
+    .filter(({ world }) => world.campaign === campaignNumber)
+    .flatMap(({ worldIndex }) => questIndexesByWorld[worldIndex] ?? []);
+  return campaignQuestIndexes.some(index => completed.has(quests[index].id)) || isWorldUnlocked(firstWorld, completed);
+}
+
+function nextJourneyQuestIndex(completed: Set<string>): number {
+  return journeyQuestIndexes.find(index => !completed.has(quests[index].id)) ?? journeyQuestIndexes.at(-1) ?? 0;
+}
+
 function quizSetFor(quest: Quest): Quiz[] {
   if (quest.quizBank && quest.quizBank.length >= 3) {
     const offset = [...quest.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % quest.quizBank.length;
@@ -1735,24 +1777,46 @@ function WorldGlyph({ index }: { index: number }) {
 }
 
 function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { completed: string[]; onOpenQuest: (index: number) => void; onOpenForge: () => void; onOpenQuickQuiz: () => void }) {
+  const completedSet = useMemo(() => new Set(completed), [completed]);
   const xp = quests.filter(q => completed.includes(q.id)).reduce((sum, q) => sum + q.xp, 0);
   const level = Math.min(7, Math.floor(xp / 450) + 1);
-  const nextIndex = quests.findIndex(q => !completed.includes(q.id));
-  const nextQuest = quests[nextIndex === -1 ? quests.length - 1 : nextIndex];
+  const nextIndex = nextJourneyQuestIndex(completedSet);
+  const nextQuest = quests[nextIndex];
   const nextCampaign = worlds[nextQuest.world]?.campaign ?? 1;
   const [selectedCampaign, setSelectedCampaign] = useState(nextCampaign);
   const [selectedWorld, setSelectedWorld] = useState(nextQuest.world);
+  const [lockNotice, setLockNotice] = useState("");
   const campaign = atlasCampaigns.find(item => item.number === selectedCampaign) ?? atlasCampaigns[0];
   const campaignWorlds = worlds.map((world, index) => ({ ...world, index })).filter(world => world.campaign === selectedCampaign);
   const activeWorld = worlds[selectedWorld] ?? campaignWorlds[0];
   const activeQuests = quests.map((quest, index) => ({ ...quest, index })).filter(quest => quest.world === selectedWorld);
+  const activeWorldComplete = isWorldComplete(selectedWorld, completedSet);
+  const activeWorldIsNext = selectedWorld === nextQuest.world;
   const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId)).length;
   const estimatedHours = Math.round(quests.reduce((sum, item) => sum + item.minutes, 0) / 60);
 
   const chooseCampaign = (campaignNumber: number) => {
     const firstWorld = worlds.findIndex(world => world.campaign === campaignNumber);
+    if (!isCampaignUnlocked(campaignNumber, completedSet)) {
+      const previousCampaign = atlasCampaigns.find(item => item.number === campaignNumber - 1);
+      setLockNotice(`Clear ${previousCampaign?.name ?? "the previous map"} to open this portal.`);
+      return;
+    }
+    setLockNotice("");
     setSelectedCampaign(campaignNumber);
-    if (firstWorld !== -1) setSelectedWorld(firstWorld);
+    if (firstWorld !== -1) {
+      const firstUnfinishedWorld = worlds.findIndex((world, worldIndex) => world.campaign === campaignNumber && isWorldUnlocked(worldIndex, completedSet) && !isWorldComplete(worldIndex, completedSet));
+      setSelectedWorld(firstUnfinishedWorld === -1 ? firstWorld : firstUnfinishedWorld);
+    }
+  };
+
+  const chooseWorld = (worldIndex: number) => {
+    if (!isWorldUnlocked(worldIndex, completedSet)) {
+      setLockNotice(`Clear ${worlds[worldIndex - 1]?.name ?? "the previous region"} to awaken ${worlds[worldIndex].name}.`);
+      return;
+    }
+    setLockNotice("");
+    setSelectedWorld(worldIndex);
   };
 
   return (
@@ -1803,42 +1867,61 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
       </section>
 
       <section className="world-map">
-        <header><div><span className="eyebrow">THE SHELLCRAFT ATLAS</span><h2>Five maps. One production shell.</h2></div><p>Each capstone opens a deeper map. Preview access stays open—the route guides your practice without hiding the curriculum.</p></header>
+        <header><div><span className="eyebrow">THE SHELLCRAFT ATLAS</span><h2>Five maps. One production shell.</h2></div><p>Master each quest to ignite the next landmark. Clear a region to awaken the path ahead; finish a map to open its portal.</p></header>
         <nav className="campaign-selector" aria-label="Campaign maps">
           {atlasCampaigns.map(item => {
             const mapWorldIndexes = worlds.map((world, index) => ({ world, index })).filter(entry => entry.world.campaign === item.number).map(entry => entry.index);
             const mapQuests = quests.filter(quest => mapWorldIndexes.includes(quest.world));
             const done = mapQuests.filter(quest => completed.includes(quest.id)).length;
-            return <button key={item.id} className={selectedCampaign === item.number ? "selected" : ""} onClick={() => chooseCampaign(item.number)} aria-pressed={selectedCampaign === item.number}>
-              <i>{String(item.number).padStart(2, "0")}</i><span><b>{item.name}</b><small>{done}/{mapQuests.length} quests · {item.subtitle}</small></span>
+            const unlocked = isCampaignUnlocked(item.number, completedSet);
+            const cleared = mapQuests.length > 0 && done === mapQuests.length;
+            const selected = selectedCampaign === item.number;
+            const previousCampaign = atlasCampaigns.find(previous => previous.number === item.number - 1);
+            return <button key={item.id} className={`${selected ? "selected" : ""} ${unlocked ? "unlocked" : "locked"} ${cleared ? "cleared" : ""}`} onClick={() => chooseCampaign(item.number)} aria-pressed={selected} aria-disabled={!unlocked}>
+              <i>{unlocked ? (cleared ? "✓" : String(item.number).padStart(2, "0")) : <span className="lock-rune" />}</i><span><b>{item.name}</b><small>{!unlocked ? `Clear ${previousCampaign?.name ?? "the previous map"}` : cleared ? `MAP CLEARED · ${done}/${mapQuests.length}` : selected ? `ACTIVE MAP · ${done}/${mapQuests.length}` : `UNLOCKED · ${done}/${mapQuests.length}`}</small></span>
             </button>;
           })}
         </nav>
-        <div className={`illustrated-map ${selectedCampaign === 1 ? "map-wide" : "map-atlas"}`}>
+        <div className={`illustrated-map ${selectedCampaign === 1 ? "map-wide" : "map-atlas"} ${campaignWorlds.every(world => isWorldComplete(world.index, completedSet)) ? "map-cleared" : ""}`}>
           <img src={campaignImages[selectedCampaign]} alt={`Illustrated ${campaign.name} map with six connected regions`} />
-          <span className="map-instruction">Choose a region</span>
+          <span className="map-instruction">{campaignWorlds.every(world => isWorldComplete(world.index, completedSet)) ? "Map fully awakened" : "Follow the illuminated route"}</span>
+          <div className="map-lights" aria-hidden="true">
+            {campaignWorlds.map(world => {
+              const unlocked = isWorldUnlocked(world.index, completedSet);
+              const cleared = isWorldComplete(world.index, completedSet);
+              const current = world.index === nextQuest.world;
+              return <span key={`${world.regionId}-light`} className={`map-light world-${world.color} ${!unlocked ? "locked" : cleared ? "cleared" : current ? "current" : "unlocked"}`} style={{ left: `${world.mapX}%`, top: `${world.mapY}%` }}><i /><i /></span>;
+            })}
+            {campaignWorlds.filter(world => !isWorldUnlocked(world.index, completedSet)).map(world => <span key={`${world.regionId}-shroud`} className="map-shroud" style={{ left: `${world.mapX}%`, top: `${world.mapY}%` }} />)}
+          </div>
           {campaignWorlds.map(world => {
             const worldIndex = world.index;
             const worldQuests = quests.filter(quest => quest.world === worldIndex);
             const done = worldQuests.filter(quest => completed.includes(quest.id)).length;
             const isNext = worldIndex === nextQuest.world;
+            const unlocked = isWorldUnlocked(worldIndex, completedSet);
+            const cleared = isWorldComplete(worldIndex, completedSet);
+            const previousWorld = worlds[worldIndex - 1];
             return (
               <button
-                className={`map-node world-${world.color} ${selectedWorld === worldIndex ? "selected" : ""} ${done === worldQuests.length ? "done" : ""} ${isNext ? "next" : ""}`}
+                className={`map-node world-${world.color} ${selectedWorld === worldIndex ? "selected" : ""} ${unlocked ? "unlocked" : "locked"} ${cleared ? "done cleared" : ""} ${isNext ? "next active-route" : ""}`}
                 style={{ left: `${world.mapX}%`, top: `${world.mapY}%` }}
                 key={world.regionId}
-                onClick={() => setSelectedWorld(worldIndex)}
-                aria-label={`Explore ${world.name}, ${done} of ${worldQuests.length} quests complete`}
+                onClick={() => chooseWorld(worldIndex)}
+                aria-disabled={!unlocked}
+                aria-label={!unlocked ? `${world.name} locked. Clear ${previousWorld?.name ?? "the previous region"} first.` : `Explore ${world.name}, ${done} of ${worldQuests.length} quests complete`}
               >
-                <i>{worldQuests.length > 0 && done === worldQuests.length ? "✓" : world.order}</i>
-                <span><b>{world.name}</b><small>{done}/{worldQuests.length} cleared</small></span>
+                <i>{!unlocked ? <span className="lock-rune" /> : cleared ? "✓" : world.order}</i>
+                <span><b>{world.name}</b><small>{!unlocked ? `LOCKED · ${previousWorld?.name ?? "route"}` : cleared ? "REGION CLEARED" : isNext ? `NEXT · ${done}/${worldQuests.length}` : `UNLOCKED · ${done}/${worldQuests.length}`}</small></span>
               </button>
             );
           })}
+          {lockNotice && <span className="atlas-lock-notice" role="status"><i><span className="lock-rune" /></i><b>PATH SEALED</b><small>{lockNotice}</small></span>}
         </div>
         <article className={`region-drawer world-${activeWorld.color}`}>
           <img src={activeWorld.image} alt={`${activeWorld.name} illustrated region`} />
           <div className="region-copy">
+            <div className={`region-state ${activeWorldComplete ? "cleared" : activeWorldIsNext ? "current" : "unlocked"}`}><i /><span><b>{activeWorldComplete ? "REGION CLEARED" : activeWorldIsNext ? "ACTIVE DESTINATION" : "REGION UNLOCKED"}</b><small>{activeQuests.filter(quest => completedSet.has(quest.id)).length}/{activeQuests.length} quest sigils lit</small></span></div>
             <small>{activeWorld.eyebrow}</small>
             <h3>{activeWorld.name}</h3>
             <p>{activeWorld.description}</p>
@@ -1846,7 +1929,9 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
               {activeQuests.map((quest, localIndex) => {
                 const isDone = completed.includes(quest.id);
                 const isNext = quest.index === nextIndex;
-                return <button key={quest.id} className={`${isDone ? "done" : ""} ${isNext ? "next" : ""} ${quest.boss ? "boss" : ""}`} onClick={() => onOpenQuest(quest.index)}><i>{isDone ? "✓" : quest.boss ? "◆" : localIndex + 1}</i><span><b>{quest.title}</b><small>{quest.minutes} min · {quest.xp} XP</small></span><em>→</em></button>;
+                const unlocked = isQuestUnlocked(quest.index, completedSet);
+                const previousQuest = activeQuests[localIndex - 1];
+                return <button key={quest.id} className={`${isDone ? "done" : ""} ${isNext ? "next" : ""} ${unlocked ? "unlocked" : "locked"} ${quest.boss ? "boss" : ""}`} onClick={() => unlocked && onOpenQuest(quest.index)} aria-disabled={!unlocked}><i>{!unlocked ? <span className="lock-rune" /> : isDone ? "✓" : quest.boss ? "◆" : localIndex + 1}</i><span><b>{quest.title}</b><small>{!unlocked ? `Locked · clear ${previousQuest?.title ?? "the previous quest"}` : `${quest.minutes} min · ${quest.xp} XP`}</small></span><em>{unlocked ? "→" : "—"}</em></button>;
               })}
             </div>
           </div>
@@ -1886,6 +1971,7 @@ export default function Home() {
   const [lessonMode, setLessonMode] = useState<LessonMode>("split");
   const [importStatus, setImportStatus] = useState("");
   const [celebration, setCelebration] = useState(false);
+  const [unlockReveal, setUnlockReveal] = useState<{ eyebrow: string; title: string } | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
@@ -1903,6 +1989,10 @@ export default function Home() {
   const quizCorrectCount = quizResults.filter(Boolean).length;
   const quizAnsweredCount = questQuizAnswers.filter(answer => answer !== undefined).length;
   const quizCorrect = quizCorrectCount === quizSet.length;
+  const completedSet = useMemo(() => new Set(completed), [completed]);
+  const journeyPosition = journeyPositionByQuestIndex.get(questIndex) ?? 0;
+  const previousJourneyIndex = journeyQuestIndexes[journeyPosition - 1];
+  const nextJourneyIndex = journeyQuestIndexes[journeyPosition + 1];
   const xp = quests.filter(q => completed.includes(q.id)).reduce((sum, q) => sum + q.xp, 0);
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const rank = ranks[level - 1];
@@ -1916,7 +2006,9 @@ export default function Home() {
   const activeCampaign = quest.campaign ?? 0;
 
   const openQuest = (index: number) => {
-    setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
+    const safeIndex = Math.max(0, Math.min(index, quests.length - 1));
+    if (!isQuestUnlocked(safeIndex, completedSet)) return;
+    setQuestIndex(safeIndex); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
     requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -1950,15 +2042,18 @@ export default function Home() {
   };
 
   const startQuickQuiz = () => {
+    const availableQuestIndexes = journeyQuestIndexes.filter(index => isQuestUnlocked(index, completedSet));
+    const availableQuests = availableQuestIndexes.map(index => quests[index]);
     const selected = selectReviewCandidates(
-      quests.map(item => ({ id: item.id, campaign: item.campaign ?? 0, boss: item.boss, prerequisites: item.prerequisites, conceptIds: item.conceptTags })),
+      availableQuests.map(item => ({ id: item.id, campaign: item.campaign ?? 0, boss: item.boss, prerequisites: item.prerequisites, conceptIds: item.conceptTags })),
       mastery,
       quickQuizScope,
-      { completed: new Set(completed), activeCampaign },
+      { completed: completedSet, activeCampaign },
     );
     const pool = selected.map(candidate => quests.find(item => item.id === candidate.id)).filter((item): item is Quest => Boolean(item));
-    quests.forEach(item => { if (pool.length < 5 && !pool.some(entry => entry.id === item.id)) pool.push(item); });
-    const items = shuffled(pool).slice(0, 5).map((item, index) => ({
+    availableQuests.forEach(item => { if (pool.length < 5 && !pool.some(entry => entry.id === item.id)) pool.push(item); });
+    const shuffledPool = shuffled(pool.length > 0 ? pool : availableQuests);
+    const items = Array.from({ length: 5 }, (_, index) => shuffledPool[index % shuffledPool.length]).map((item, index) => ({
       questId: item.id,
       questIndex: quests.findIndex(questItem => questItem.id === item.id),
       world: item.world,
@@ -2017,8 +2112,8 @@ export default function Home() {
       }
       if (event.key === "Escape") { setNavOpen(false); setForgeOpen(false); setGlossaryOpen(false); }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && view === "quest") { event.preventDefault(); setChecked(true); if (!allChecksPass) setHintOpen(true); }
-      if (event.altKey && event.key === "ArrowRight") openQuest(Math.min(questIndex + 1, quests.length - 1));
-      if (event.altKey && event.key === "ArrowLeft") openQuest(Math.max(questIndex - 1, 0));
+      if (event.altKey && event.key === "ArrowRight" && nextJourneyIndex !== undefined) openQuest(nextJourneyIndex);
+      if (event.altKey && event.key === "ArrowLeft" && previousJourneyIndex !== undefined) openQuest(previousJourneyIndex);
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
@@ -2187,10 +2282,21 @@ export default function Home() {
   };
 
   const completeQuest = () => {
-    if (!allChecksPass || !quizCorrect) return;
-    setCompleted(current => current.includes(quest.id) ? current : [...current, quest.id]);
+    if (!allChecksPass || !quizCorrect || completedSet.has(quest.id)) return;
+    const followingIndex = journeyQuestIndexes[journeyPosition + 1];
+    const followingQuest = followingIndex === undefined ? undefined : quests[followingIndex];
+    const worldQuestIndexes = questIndexesByWorld[quest.world] ?? [];
+    const closesRegion = worldQuestIndexes.at(-1) === questIndex;
+    const opensNewMap = closesRegion && followingQuest && worlds[followingQuest.world].campaign !== worlds[quest.world].campaign;
+
+    if (!followingQuest) setUnlockReveal({ eyebrow: "ATLAS FULLY AWAKENED", title: "Shellwright journey complete" });
+    else if (opensNewMap) setUnlockReveal({ eyebrow: "NEW MAP UNLOCKED", title: atlasCampaigns.find(item => item.number === worlds[followingQuest.world].campaign)?.name ?? worlds[followingQuest.world].name });
+    else if (closesRegion) setUnlockReveal({ eyebrow: "NEW REGION UNLOCKED", title: worlds[followingQuest.world].name });
+    else setUnlockReveal({ eyebrow: "NEXT QUEST UNLOCKED", title: followingQuest.title });
+
+    setCompleted(current => [...current, quest.id]);
     setCelebration(true);
-    window.setTimeout(() => setCelebration(false), 2400);
+    window.setTimeout(() => { setCelebration(false); setUnlockReveal(null); }, 2800);
   };
 
   return (
@@ -2206,11 +2312,12 @@ export default function Home() {
         <div className={`quest-view mode-${lessonMode}`}>
           <aside className="quest-rail">
             <button className="back-map" onClick={() => setView("map")}><i>←</i><span>World map</span></button>
-            <div className="rail-world"><WorldGlyph index={quest.world} /><small>{worlds[quest.world].eyebrow}</small><b>{worlds[quest.world].name}</b><span>{questIndex + 1} / {quests.length}</span></div>
+            <div className="rail-world"><WorldGlyph index={quest.world} /><small>{worlds[quest.world].eyebrow}</small><b>{worlds[quest.world].name}</b><span>{journeyPosition + 1} / {quests.length}</span></div>
             <nav aria-label="World quests">
-              {quests.filter(item => item.world === quest.world).map((item) => {
+              {quests.filter(item => item.world === quest.world).map((item, localIndex) => {
                 const index = quests.findIndex(entry => entry.id === item.id);
-                return <button key={item.id} className={`${index === questIndex ? "active" : ""} ${completed.includes(item.id) ? "done" : ""}`} onClick={() => openQuest(index)}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span>{item.title}</span></button>;
+                const unlocked = isQuestUnlocked(index, completedSet);
+                return <button key={item.id} className={`${index === questIndex ? "active" : ""} ${completed.includes(item.id) ? "done" : ""} ${unlocked ? "unlocked" : "locked"}`} onClick={() => openQuest(index)} aria-disabled={!unlocked}><i>{!unlocked ? <span className="lock-rune" /> : completed.includes(item.id) ? "✓" : item.boss ? "◆" : localIndex + 1}</i><span>{item.title}</span></button>;
               })}
             </nav>
             <div className="rail-companion"><span className="companion-face"><i /><i /><b /></span><p><b>CORE SAYS</b>{quizAnsweredCount === 0 ? "Read slowly. Predict before you run." : quizCorrect ? "All three mental models synchronized." : `${quizCorrectCount}/3 signals aligned. Mistakes are map data.`}</p></div>
@@ -2219,7 +2326,7 @@ export default function Home() {
           <section className="lesson-scroll">
             <article className="lesson-body">
               <header className="lesson-hero">
-                <div className="quest-meta"><span>{quest.boss ? "BOSS QUEST" : quest.sideQuest ? "SIDE QUEST" : `QUEST ${String(questIndex + 1).padStart(3, "0")}`}</span><i>{quest.minutes} min</i><i>+{quest.xp} XP</i><i>{masteryPercent(mastery[quest.conceptTags?.[0] ?? quest.id])}% mastery</i><i className={`execution-tier tier-${quest.executionTier ?? "browser"}`}>{quest.executionTier === "runtime" ? "Linux runtime" : quest.executionTier === "static" ? "Static QML check" : "Browser simulation"}</i></div>
+                <div className="quest-meta"><span>{quest.boss ? "BOSS QUEST" : quest.sideQuest ? "SIDE QUEST" : `QUEST ${String(journeyPosition + 1).padStart(3, "0")}`}</span><i>{quest.minutes} min</i><i>+{quest.xp} XP</i><i>{masteryPercent(mastery[quest.conceptTags?.[0] ?? quest.id])}% mastery</i><i className={`execution-tier tier-${quest.executionTier ?? "browser"}`}>{quest.executionTier === "runtime" ? "Linux runtime" : quest.executionTier === "static" ? "Static QML check" : "Browser simulation"}</i></div>
                 <p className="lesson-kicker">{quest.subtitle}</p>
                 <h1>{quest.title}</h1>
                 <p className="lesson-objective">{quest.objective}</p>
@@ -2264,7 +2371,7 @@ export default function Home() {
           </section>
 
           <aside className="lab-dock">
-            <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(questIndex + 1).padStart(2, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
+            <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(journeyPosition + 1).padStart(3, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
             <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p><img src="/qml-build-lab.jpg" alt="Illustrated reactive QML component workbench" /></section>
             <section className="preview-wrap"><div><span>CONCEPT PREVIEW</span><small>tap to change state</small></div><ScenePreview quest={quest} code={code} /></section>
             <section className="code-editor">
@@ -2284,7 +2391,7 @@ export default function Home() {
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
               <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
             </section>
-            <footer><button disabled={questIndex === 0} onClick={() => openQuest(questIndex - 1)}>←</button><span>Alt + arrows navigate</span><button disabled={questIndex === quests.length - 1} onClick={() => openQuest(questIndex + 1)}>→</button></footer>
+            <footer><button disabled={previousJourneyIndex === undefined} onClick={() => previousJourneyIndex !== undefined && openQuest(previousJourneyIndex)}>←</button><span>{nextJourneyIndex !== undefined && !isQuestUnlocked(nextJourneyIndex, completedSet) ? "Master this quest to open the route" : "Alt + arrows navigate"}</span><button disabled={nextJourneyIndex === undefined || !isQuestUnlocked(nextJourneyIndex, completedSet)} onClick={() => nextJourneyIndex !== undefined && openQuest(nextJourneyIndex)}>→</button></footer>
           </aside>
         </div>
       )}
@@ -2301,7 +2408,7 @@ export default function Home() {
         </div>}
 
         {quickQuizPhase === "playing" && quickQuizItem && <div className="quick-quiz-play">
-          <div className="quick-quiz-runbar"><div className="quick-quiz-segments">{quickQuizItems.map((item, index) => <i key={item.questId} className={index < quickQuizStep ? (quickQuizAnswers[index] === item.quiz.answer ? "correct" : "wrong") : index === quickQuizStep ? "current" : ""} />)}</div><span><small>SCORE</small><b>{quickQuizScore}</b></span><span className={quickQuizStreak > 1 ? "hot" : ""}><small>STREAK</small><b>{quickQuizStreak > 1 ? `×${quickQuizStreak}` : "—"}</b></span></div>
+          <div className="quick-quiz-runbar"><div className="quick-quiz-segments">{quickQuizItems.map((item, index) => <i key={`${item.questId}-${index}`} className={index < quickQuizStep ? (quickQuizAnswers[index] === item.quiz.answer ? "correct" : "wrong") : index === quickQuizStep ? "current" : ""} />)}</div><span><small>SCORE</small><b>{quickQuizScore}</b></span><span className={quickQuizStreak > 1 ? "hot" : ""}><small>STREAK</small><b>{quickQuizStreak > 1 ? `×${quickQuizStreak}` : "—"}</b></span></div>
           <article className={`quick-quiz-card world-${worlds[quickQuizItem.world].color}`}>
             <div className="quick-quiz-context"><WorldGlyph index={quickQuizItem.world} /><span><small>{worlds[quickQuizItem.world].name} · {quickQuizItem.quiz.kind}</small><b>{quickQuizItem.questTitle}</b></span><em>{quickQuizStep + 1}/5</em></div>
             <h3>{quickQuizItem.quiz.question}</h3>
@@ -2339,9 +2446,20 @@ export default function Home() {
         })}</div></section>
       </aside></div>}
 
-      {navOpen && <div className="navigator-backdrop"><button className="navigator-dismiss" onClick={() => setNavOpen(false)} aria-label="Close quest navigator" /><section className="navigator" role="dialog" aria-modal="true" aria-label="Quest navigator"><header><div><small>QUEST COMPASS</small><h2>Jump through the journey</h2></div><button onClick={() => setNavOpen(false)}>×</button></header><div>{worlds.map((world, worldIndex) => <section key={world.name}><span><WorldGlyph index={worldIndex} /><b>{world.name}</b></span>{quests.map((item, index) => ({ item, index })).filter(({ item }) => item.world === worldIndex).map(({ item, index }) => <button key={item.id} onClick={() => openQuest(index)} className={completed.includes(item.id) ? "done" : ""}><i>{completed.includes(item.id) ? "✓" : item.boss ? "◆" : index + 1}</i><span><b>{item.title}</b><small>{item.minutes} min · {item.xp} XP</small></span><em>→</em></button>)}</section>)}</div></section></div>}
+      {navOpen && <div className="navigator-backdrop"><button className="navigator-dismiss" onClick={() => setNavOpen(false)} aria-label="Close quest navigator" /><section className="navigator" role="dialog" aria-modal="true" aria-label="Quest navigator">
+        <header><div><small>QUEST COMPASS</small><h2>Follow the awakened route</h2></div><button onClick={() => setNavOpen(false)}>×</button></header>
+        <div>{worlds.map((world, worldIndex) => {
+          const worldUnlocked = isWorldUnlocked(worldIndex, completedSet);
+          const worldCleared = isWorldComplete(worldIndex, completedSet);
+          const worldQuestEntries = quests.map((item, index) => ({ item, index })).filter(({ item }) => item.world === worldIndex);
+          return <section key={world.name} className={`${worldUnlocked ? "unlocked" : "locked"} ${worldCleared ? "cleared" : ""}`}><span><WorldGlyph index={worldIndex} /><b>{world.name}</b><small>{!worldUnlocked ? "SEALED" : worldCleared ? "CLEARED" : worldIndex === quest.world ? "ACTIVE" : "OPEN"}</small></span>{worldQuestEntries.map(({ item, index }, localIndex) => {
+            const unlocked = isQuestUnlocked(index, completedSet);
+            return <button key={item.id} onClick={() => openQuest(index)} className={`${completed.includes(item.id) ? "done" : ""} ${unlocked ? "unlocked" : "locked"}`} aria-disabled={!unlocked}><i>{!unlocked ? <span className="lock-rune" /> : completed.includes(item.id) ? "✓" : item.boss ? "◆" : localIndex + 1}</i><span><b>{item.title}</b><small>{unlocked ? `${item.minutes} min · ${item.xp} XP` : "Complete the previous quest"}</small></span><em>{unlocked ? "→" : "—"}</em></button>;
+          })}</section>;
+        })}</div>
+      </section></div>}
 
-      {celebration && <div className="celebration" role="status"><span className="burst"><i /><i /><i /><i /><i /><i /></span><CoreMark level={level} /><small>QUEST MASTERED</small><b>+{quest.xp} XP</b><p>{quest.title}</p></div>}
+      {celebration && <div className="celebration" role="status"><span className="burst"><i /><i /><i /><i /><i /><i /></span><CoreMark level={level} /><small>QUEST MASTERED · +{quest.xp} XP</small><b>{unlockReveal?.eyebrow ?? "CORE STABILIZED"}</b><p>{unlockReveal?.title ?? quest.title}</p></div>}
     </main>
   );
 }

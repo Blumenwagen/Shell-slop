@@ -38,6 +38,10 @@ test("server-renders the complete five-map QML Shellcraft atlas", async () => {
   assert.match(html, /Static QML check/);
   assert.match(html, /Linux runtime/);
   assert.match(html, /Tell QML what exists/);
+  assert.match(html, /Follow the illuminated route/);
+  assert.match(html, /aria-disabled="true"/);
+  assert.match(html, /LOCKED/);
+  assert.match(html, /NEXT/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
 
@@ -219,6 +223,13 @@ test("keeps the interactive course UI, generated atlas art, and production metad
   assert.match(page, /analyzeQml/);
   assert.match(page, /hasBlockingDiagnostics/);
   assert.match(page, /executionTier/);
+  assert.match(page, /journeyQuestIndexes/);
+  assert.match(page, /isQuestUnlocked/);
+  assert.match(page, /isWorldUnlocked/);
+  assert.match(page, /isCampaignUnlocked/);
+  assert.match(page, /NEW REGION UNLOCKED/);
+  assert.match(page, /NEW MAP UNLOCKED/);
+  assert.match(page, /PATH SEALED/);
 
   assert.match(css, /\.world-map/);
   assert.match(css, /\.campaign-selector/);
@@ -231,6 +242,11 @@ test("keeps the interactive course UI, generated atlas art, and production metad
   assert.match(css, /\.diagnostic-stack/);
   assert.match(css, /\.editor-surface/);
   assert.match(css, /\.celebration/);
+  assert.match(css, /\.map-light/);
+  assert.match(css, /landmark-awaken/);
+  assert.match(css, /\.map-shroud/);
+  assert.match(css, /\.lock-rune/);
+  assert.match(css, /\.atlas-lock-notice/);
   assert.match(css, /prefers-reduced-motion/);
 
   mapBuffers.forEach((buffer, index) => {
