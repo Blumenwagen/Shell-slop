@@ -11,18 +11,18 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     metadataBase: base,
     title: "QML Shellcraft — Zero to Shellwright",
-    description: "A playful 26-quest QML and Quickshell adventure. Learn from absolute zero, master reactive UI, and build a living multi-monitor desktop shell.",
+    description: "A playful 160-quest QML and Quickshell atlas. Learn from absolute zero, build a living multi-monitor shell, and validate it on Linux/Wayland.",
     openGraph: {
       title: "QML Shellcraft",
-      description: "Zero → Shellwright · 26 interactive quests to build a living desktop shell.",
+      description: "Zero → Shellwright · five maps and 160 interactive quests to build a living desktop shell.",
       type: "website",
-      images: [{ url: "/og.png", width: 1728, height: 909, alt: "QML Shellcraft — Zero to Shellwright" }],
+      images: [{ url: "/og.jpg", width: 1731, height: 909, alt: "QML Shellcraft — Zero to Shellwright" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "QML Shellcraft",
-      description: "Zero → Shellwright · 26 interactive quests to build a living desktop shell.",
-      images: ["/og.png"],
+      description: "Zero → Shellwright · five maps and 160 interactive quests to build a living desktop shell.",
+      images: ["/og.jpg"],
     },
   };
 }

@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { atlasCampaigns, atlasQuestSeeds } from "./course/atlas";
+import { analyzeQml, hasBlockingDiagnostics } from "./course/editor";
+import { createForgeProject, FORGE_ARTIFACTS } from "./course/forge";
+import { masteryPercent, normalizeMastery, recordAnswer, recordSupportUse, selectReviewCandidates, type MasteryState, type ReviewMode } from "./course/mastery";
 
 type Check = { label: string; hint: string; test: (code: string) => boolean };
 type Quiz = { kind?: string; question: string; options: string[]; answer: number; explanation: string };
-type Scene = "object" | "binding" | "layout" | "control" | "motion" | "model" | "theme" | "bar" | "screens" | "graph" | "drawer" | "audit";
+type Scene = "object" | "binding" | "layout" | "control" | "motion" | "model" | "theme" | "bar" | "screens" | "graph" | "drawer" | "audit" | "service" | "media" | "network" | "notification" | "launcher" | "security" | "release";
 type LessonMode = "learn" | "split" | "build";
 type ForgeArtifact = { code: string; name: string; description: string; questId: string; file: string };
-type QuickQuizScope = "path" | "all";
+type QuickQuizScope = ReviewMode;
 type QuickQuizPhase = "ready" | "playing" | "result";
 type QuickQuizItem = { questId: string; questIndex: number; world: number; questTitle: string; quiz: Quiz };
 
@@ -31,23 +35,50 @@ type Quest = {
   solution: string;
   checks: Check[];
   quiz: Quiz;
+  quizBank?: Quiz[];
   scene: Scene;
+  campaign?: number;
+  conceptTags?: string[];
+  prerequisites?: string[];
+  executionTier?: "browser" | "static" | "runtime";
+  sideQuest?: boolean;
 };
 
-type World = { name: string; eyebrow: string; description: string; color: string; image: string; mapX: number; mapY: number };
+type World = { name: string; eyebrow: string; description: string; color: string; image: string; mapX: number; mapY: number; campaign: number; regionId: string; order: number };
 
-const worlds: World[] = [
-  { name: "First Sparks", eyebrow: "World 1 · zero knowledge required", description: "Learn how QML thinks: objects, properties, identity, and reactive bindings.", color: "violet", image: "/world-first-sparks.png", mapX: 20, mapY: 27 },
-  { name: "Shape District", eyebrow: "World 2 · compose visible things", description: "Own space, arrange content, extract components, and design interaction feedback.", color: "coral", image: "/world-shape-district.png", mapX: 50, mapY: 26 },
-  { name: "Motion Arcade", eyebrow: "World 3 · make state feel alive", description: "Create causal motion, named states, stable collections, and a token-driven visual language.", color: "cyan", image: "/world-motion-arcade.png", mapX: 80, mapY: 28 },
-  { name: "System Frontier", eyebrow: "World 4 · enter Quickshell", description: "Cross from ordinary QML into real desktop surfaces, screen models, and system services.", color: "lime", image: "/world-system-frontier.png", mapX: 79, mapY: 70 },
-  { name: "Living Shell", eyebrow: "World 5 · architecture becomes UX", description: "Separate state, focus, input, services, and connected edge geometry into a reliable product.", color: "amber", image: "/world-living-shell.png", mapX: 50, mapY: 72 },
-  { name: "Hero Forge", eyebrow: "World 6 · ship your own shell", description: "Add performance, IPC, a complete vertical slice, and the validation discipline of a shellwright.", color: "pink", image: "/world-hero-forge.png", mapX: 20, mapY: 70 },
+const campaignImages: Record<number, string> = {
+  1: "/world-map.jpg",
+  2: "/map-system-atlas.jpg",
+  3: "/map-surface-realms.jpg",
+  4: "/map-expression-expanse.jpg",
+  5: "/map-production-citadel.jpg",
+};
+
+const awakeningRegionImages = [
+  "/world-first-sparks.jpg",
+  "/world-shape-district.jpg",
+  "/world-motion-arcade.jpg",
+  "/world-system-frontier.jpg",
+  "/world-living-shell.jpg",
+  "/world-hero-forge.jpg",
 ];
+
+const worlds: World[] = atlasCampaigns.flatMap(campaign => campaign.regions.map((region, index) => ({
+  name: region.name,
+  eyebrow: `Map ${campaign.number} · Region ${region.order} · ${region.subtitle}`,
+  description: region.description,
+  color: region.color === "red" ? "coral" : region.color,
+  image: campaign.number === 1 ? awakeningRegionImages[index] : campaignImages[campaign.number],
+  mapX: region.mapX,
+  mapY: region.mapY,
+  campaign: campaign.number,
+  regionId: region.id,
+  order: region.order,
+})));
 
 const ck = (label: string, hint: string, pattern: RegExp): Check => ({ label, hint, test: code => pattern.test(code) });
 
-const quests: Quest[] = [
+const legacyQuests: Quest[] = [
   {
     id: "qml-is-a-description", world: 0, title: "Tell QML what exists", subtitle: "Declarative UI, without the jargon", minutes: 16, xp: 100,
     objective: "Create your first object and understand why QML is a description rather than a list of drawing commands.",
@@ -1457,7 +1488,62 @@ ShellRoot {
   },
 ];
 
+const atlasExpansionQuests: Quest[] = atlasQuestSeeds.map(seed => {
+  const world = worlds.findIndex(item => item.regionId === seed.regionId);
+  if (world === -1) throw new Error(`Unknown Shellcraft region: ${seed.regionId}`);
+  const quizzes: Quiz[] = seed.quizzes.map(quiz => ({
+    kind: quiz.format.replaceAll("-", " ").toUpperCase(),
+    question: quiz.question,
+    options: [...quiz.options],
+    answer: quiz.answer,
+    explanation: quiz.explanation,
+  }));
+  return {
+    id: seed.id,
+    world,
+    campaign: seed.campaign,
+    title: seed.title,
+    subtitle: seed.subtitle,
+    minutes: seed.minutes,
+    xp: seed.xp,
+    boss: seed.boss,
+    sideQuest: seed.sideQuest,
+    objective: seed.objective,
+    story: seed.story,
+    explanation: [...seed.explanation],
+    analogy: seed.analogy,
+    rules: [...seed.rules],
+    terms: seed.terms.map(([term, definition]) => [term, definition] as [string, string]),
+    anatomy: seed.solution,
+    anatomyNotes: seed.checks.map(check => `${check.label}: ${check.hint}`),
+    starter: seed.starter,
+    solution: seed.solution,
+    checks: seed.checks.map(check => {
+      const expression = new RegExp(check.pattern, check.flags?.replaceAll("g", "") ?? "");
+      return { label: check.label, hint: check.hint, test: (code: string) => expression.test(code) };
+    }),
+    quiz: quizzes[0],
+    quizBank: quizzes,
+    scene: seed.scene,
+    conceptTags: [...seed.conceptTags],
+    prerequisites: [...seed.prerequisiteIds],
+    executionTier: seed.executionTier === "linux-wayland-runtime" ? "runtime" : seed.executionTier === "static-qml-check" ? "static" : "browser",
+  };
+});
+
+const quests: Quest[] = [...legacyQuests.map(quest => ({
+  ...quest,
+  campaign: 1,
+  conceptTags: quest.conceptTags ?? [quest.id],
+  prerequisites: quest.prerequisites ?? [],
+  executionTier: quest.executionTier ?? (quest.id === "validation-capstone" ? "runtime" : quest.world >= 3 ? "static" : "browser"),
+})), ...atlasExpansionQuests];
+
 function quizSetFor(quest: Quest): Quiz[] {
+  if (quest.quizBank && quest.quizBank.length >= 3) {
+    const offset = [...quest.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % quest.quizBank.length;
+    return [0, 1, 2].map(index => ({ ...quest.quizBank![(offset + index * 2) % quest.quizBank!.length] }));
+  }
   const primaryCheck = quest.checks[0];
   const alternativeCheck = quest.checks[1] ?? quest.checks[0];
   const rawDetective = [
@@ -1502,26 +1588,27 @@ function shuffled<T>(items: T[]) {
   return next;
 }
 
-const storageKey = "qml-shellcraft-adventure-v2";
+const storageKey = "qml-shellcraft-adventure-v5";
+const legacyStorageKey = "qml-shellcraft-adventure-v2";
 
 const totalXp = quests.reduce((sum, quest) => sum + quest.xp, 0);
 const ranks = ["Spark", "Binder", "Composer", "Signal Runner", "Edge Keeper", "Screen Tamer", "Shellwright"];
-
-const forgeArtifacts: ForgeArtifact[] = [
-  { code: "RT", name: "Root Tree", description: "A compositional object tree with explicit ownership.", questId: "qml-is-a-description", file: "shell.qml" },
-  { code: "BX", name: "Binding Core", description: "Reactive state that drives geometry and appearance.", questId: "reactive-bindings", file: "state/BindingCore.qml" },
-  { code: "CP", name: "Component Contract", description: "Reusable controls with required inputs and intent signals.", questId: "component-contracts", file: "components/StatusPill.qml" },
-  { code: "SL", name: "State Layer", description: "One interaction grammar for hover, press, focus, and selection.", questId: "interaction-state", file: "components/StateLayer.qml" },
-  { code: "MX", name: "Motion Roles", description: "Interruptible semantic motion with causal origins.", questId: "behaviors-motion", file: "config/Motion.qml" },
-  { code: "MD", name: "Stable Model", description: "Changing collections with durable delegate identity.", questId: "models-delegates", file: "models/WorkspaceModel.qml" },
-  { code: "TH", name: "Theme Kernel", description: "Wallpaper-aware semantic tokens and radius roles.", questId: "theme-tokens", file: "config/Theme.qml" },
-  { code: "PW", name: "Screen Edge", description: "A real PanelWindow with intentional exclusion.", questId: "panelwindow-edges", file: "modules/bar/Bar.qml" },
-  { code: "VS", name: "Screen Factory", description: "Per-screen windows that survive monitor changes.", questId: "variants-screens", file: "modules/bar/Screens.qml" },
-  { code: "SV", name: "Service Boundary", description: "One observer exposing stable system truth to many views.", questId: "service-boundaries", file: "services/SystemService.qml" },
-  { code: "CG", name: "Connected Surface", description: "Edge and drawer geometry driven by shared progress.", questId: "connected-geometry", file: "modules/drawer/Drawer.qml" },
-  { code: "IP", name: "Shell API", description: "Visual, shortcut, and IPC routes sharing one action.", questId: "ipc-shortcuts", file: "state/Actions.qml" },
-  { code: "SW", name: "Shellwright Crest", description: "A validation contract for reload, hotplug, failure, and focus.", questId: "validation-capstone", file: "VALIDATION.md" },
+const reviewModes: { id: QuickQuizScope; code: string; label: string; description: string }[] = [
+  { id: "journey", code: "PATH", label: "My journey", description: "Mastered ideas plus your frontier" },
+  { id: "weak", code: "LOW", label: "Weak signals", description: "Lowest mastery first" },
+  { id: "due", code: "NOW", label: "Due today", description: "Spaced review ready now" },
+  { id: "campaign", code: "MAP", label: "Current map", description: "Train this campaign" },
+  { id: "boss", code: "◆", label: "Boss prep", description: "Integration and judgment" },
+  { id: "all", code: "∞", label: "Mixed atlas", description: "Every unlocked concept" },
 ];
+
+const forgeArtifacts: ForgeArtifact[] = FORGE_ARTIFACTS.map(artifact => ({
+  code: artifact.code,
+  name: artifact.name,
+  description: artifact.description,
+  questId: artifact.questId,
+  file: artifact.primaryFile,
+}));
 
 function qmlHighlight(code: string) {
   const tokens = code.split(/(\/\/[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:import|pragma|property|required|readonly|signal|function|id|true|false|null|var|int|bool|real|string|color|url)\b|\bon[A-Z]\w*\b|\b[A-Z]\w*\b|\b\d+(?:\.\d+)?\b)/g);
@@ -1549,66 +1636,6 @@ function formatQml(code: string) {
     depth = Math.max(0, depth + opens - closes + (closesFirst ? 1 : 0));
     return formatted;
   }).join("\n");
-}
-
-function forgeProjectFiles(completed: string[], codes: Record<string, string>) {
-  const files: Record<string, string> = {
-    "README.md": `# My QML Shellcraft project
-
-This project grows with the quests you master.
-
-## Run
-
-1. Install Quickshell 0.3.x and Qt 6.
-2. From this directory run: \`quickshell -p .\`
-3. Edit a QML file while Quickshell is running to practice hot reload.
-
-The generated shell is an independent learning scaffold inspired by End-4 and Caelestia design principles; it does not copy their code or identity.
-`,
-    "shell.qml": `import Quickshell
-import QtQuick
-
-ShellRoot {
-    Variants {
-        model: Quickshell.screens
-
-        PanelWindow {
-            required property ShellScreen modelData
-            screen: modelData
-            anchors { top: true; left: true; right: true }
-            implicitHeight: 42
-            color: "transparent"
-
-            Rectangle {
-                anchors.fill: parent
-                color: "#211a2d"
-                radius: 14
-
-                Text {
-                    anchors.centerIn: parent
-                    color: "#f7f2ff"
-                    text: "My living shell"
-                }
-            }
-        }
-    }
-}
-`,
-    ".qmlls.ini": "[General]\n",
-    "config/Theme.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property color background: "#100d18"\n    readonly property color surface: "#211a2d"\n    readonly property color primary: "#ab9aff"\n    readonly property color onSurface: "#f7f2ff"\n    readonly property int spacingSmall: 8\n    readonly property int spacingMedium: 14\n    readonly property int radiusSmall: 8\n    readonly property int radiusSurface: 22\n}\n`,
-    "config/Motion.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property int immediate: 120\n    readonly property int fastEffect: 190\n    readonly property int enter: 360\n    readonly property int exit: 210\n    readonly property int spatial: 430\n}\n`,
-    "state/ShellState.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    property bool drawerOpen: false\n    property real drawerProgress: drawerOpen ? 1 : 0\n}\n`,
-    "services/SystemService.qml": `pragma Singleton\n\nimport QtQuick\n\nQtObject {\n    readonly property bool ready: true\n    readonly property string status: ready ? "ready" : "unavailable"\n}\n`,
-    "components/StateLayer.qml": `import QtQuick\n\nRectangle {\n    required property bool hovered\n    required property bool pressed\n    color: pressed ? "#33ffffff" : hovered ? "#1fffffff" : "transparent"\n    Behavior on color { ColorAnimation { duration: 120 } }\n}\n`,
-    "VALIDATION.md": "# Validation matrix\n\n- [ ] Hot reload\n- [ ] Monitor hotplug\n- [ ] Fullscreen policy\n- [ ] Keyboard focus\n- [ ] Service failure\n- [ ] Reduced motion\n",
-  };
-  completed.forEach(id => {
-    const index = quests.findIndex(quest => quest.id === id);
-    if (index === -1) return;
-    const quest = quests[index];
-    files[`practice/${String(index + 1).padStart(2, "0")}-${quest.id}.qml`] = codes[id] ?? quest.solution;
-  });
-  return files;
 }
 
 function writeTarText(target: Uint8Array, offset: number, value: string, length: number) {
@@ -1690,6 +1717,13 @@ function ScenePreview({ quest, code }: { quest: Quest; code: string }) {
       {quest.scene === "graph" && <span className="graph-scene"><i>shell</i><b>modules</b><b>state</b><b>services</b><em /></span>}
       {quest.scene === "drawer" && <><span className="edge-anchor"><i /><i /><b /></span><span className="drawer-scene"><small>{hasMask ? "click-through safe" : "edge surface"}</small><strong>{active ? "Drawer open" : "Pull from edge"}</strong><i /></span></>}
       {quest.scene === "audit" && <span className="audit-scene">{["reload", "hotplug", "focus", "failure", "motion", "IPC"].map((item, index) => <i key={item} className={active || index < 3 ? "pass" : ""}>{item}<b /></i>)}</span>}
+      {quest.scene === "service" && <span className="graph-scene"><i>system</i><b>observer</b><b>{active ? "ready" : "degraded"}</b><b>views</b><em /></span>}
+      {quest.scene === "media" && <><span className="preview-popout"><small>ACTIVE PLAYER</small><strong>{active ? "Playing · Reactive Dreams" : "No player available"}</strong><i /></span><span className="motion-scene"><i /><b>{active ? "pause" : "play"}</b></span></>}
+      {quest.scene === "network" && <span className="graph-scene"><i>radio</i><b>device</b><b>{active ? "online" : "offline"}</b><b>surface</b><em /></span>}
+      {quest.scene === "notification" && <span className="audit-scene">{["normalize", "redact", "toast", "history", "action", "dismiss"].map((item, index) => <i key={item} className={active || index < 3 ? "pass" : ""}>{item}<b /></i>)}</span>}
+      {quest.scene === "launcher" && <span className="model-scene">{["App", "Calc", "File", "Action", "Web"].map((item, index) => <i key={item} className={(active ? index === 2 : index === 0) ? "current" : ""}>{item}</i>)}</span>}
+      {quest.scene === "security" && <span className="audit-scene">{["allowlist", "redact", "PAM", "polkit", "cancel", "clear"].map((item, index) => <i key={item} className={active || index < 2 ? "pass" : ""}>{item}<b /></i>)}</span>}
+      {quest.scene === "release" && <span className="audit-scene">{["version", "migrate", "package", "rollback", "docs", "license"].map((item, index) => <i key={item} className={active || index < 3 ? "pass" : ""}>{item}<b /></i>)}</span>}
 
       <span className="scene-hud"><i className={hasMotion ? "on" : ""}>motion</i><i className={hasMask ? "on" : ""}>mask</i><i className={hasVariants ? "on" : ""}>screens</i><b>{active ? "STATE 1" : "STATE 0"}</b></span>
     </button>
@@ -1697,7 +1731,7 @@ function ScenePreview({ quest, code }: { quest: Quest; code: string }) {
 }
 
 function WorldGlyph({ index }: { index: number }) {
-  return <span className={`world-glyph glyph-${index}`} aria-hidden="true"><i /><i /><i /></span>;
+  return <span className={`world-glyph glyph-${index % 6}`} aria-hidden="true"><i /><i /><i /></span>;
 }
 
 function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { completed: string[]; onOpenQuest: (index: number) => void; onOpenForge: () => void; onOpenQuickQuiz: () => void }) {
@@ -1705,10 +1739,21 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
   const level = Math.min(7, Math.floor(xp / 450) + 1);
   const nextIndex = quests.findIndex(q => !completed.includes(q.id));
   const nextQuest = quests[nextIndex === -1 ? quests.length - 1 : nextIndex];
+  const nextCampaign = worlds[nextQuest.world]?.campaign ?? 1;
+  const [selectedCampaign, setSelectedCampaign] = useState(nextCampaign);
   const [selectedWorld, setSelectedWorld] = useState(nextQuest.world);
-  const activeWorld = worlds[selectedWorld];
+  const campaign = atlasCampaigns.find(item => item.number === selectedCampaign) ?? atlasCampaigns[0];
+  const campaignWorlds = worlds.map((world, index) => ({ ...world, index })).filter(world => world.campaign === selectedCampaign);
+  const activeWorld = worlds[selectedWorld] ?? campaignWorlds[0];
   const activeQuests = quests.map((quest, index) => ({ ...quest, index })).filter(quest => quest.world === selectedWorld);
   const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId)).length;
+  const estimatedHours = Math.round(quests.reduce((sum, item) => sum + item.minutes, 0) / 60);
+
+  const chooseCampaign = (campaignNumber: number) => {
+    const firstWorld = worlds.findIndex(world => world.campaign === campaignNumber);
+    setSelectedCampaign(campaignNumber);
+    if (firstWorld !== -1) setSelectedWorld(firstWorld);
+  };
 
   return (
     <div className="map-view">
@@ -1720,7 +1765,7 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
           <div className="hero-actions">
             <button className="primary-cta" onClick={() => onOpenQuest(nextIndex === -1 ? quests.length - 1 : nextIndex)}><span>Continue quest</span><b>{nextQuest.title}</b><i>→</i></button>
             <button className="quick-quiz-cta" onClick={onOpenQuickQuiz}><i>Q5</i><span><b>Quick quiz</b><small>5 questions · ~2 min</small></span><em>→</em></button>
-            <div className="course-promise"><i>{quests.length}</i><span>quests</span><i>6</i><span>worlds</span><i>~15h</i><span>to hero</span></div>
+            <div className="course-promise"><i>{quests.length}</i><span>quests</span><i>5</i><span>atlas maps</span><i>~{estimatedHours}h</i><span>guided path</span></div>
           </div>
         </div>
         <div className="hero-core">
@@ -1731,12 +1776,23 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
         </div>
       </section>
 
-      <section className="learning-loop">
+      <section className="learning-loop learning-loop-expanded">
         <span>YOUR QUEST LOOP</span>
-        <div><i>01</i><b>Understand</b><small>Plain-language lesson</small></div><em>→</em>
-        <div><i>02</i><b>Predict</b><small>Check your mental model</small></div><em>→</em>
-        <div><i>03</i><b>Build</b><small>Edit real QML</small></div><em>→</em>
-        <div><i>04</i><b>Master</b><small>Pass the gate, earn XP</small></div>
+        <div><i>01</i><b>Motivate</b><small>Why the shell needs it</small></div>
+        <div><i>02</i><b>Explain</b><small>Plain-language model</small></div>
+        <div><i>03</i><b>Trace</b><small>Follow live dependencies</small></div>
+        <div><i>04</i><b>Predict</b><small>Test your intuition</small></div>
+        <div><i>05</i><b>Repair</b><small>Diagnose broken QML</small></div>
+        <div><i>06</i><b>Build</b><small>Forge the real artifact</small></div>
+        <div><i>07</i><b>Transfer</b><small>Apply it elsewhere</small></div>
+        <div><i>08</i><b>Reflect</b><small>Lock in mastery</small></div>
+      </section>
+
+      <section className="execution-ladder" aria-label="Course execution levels">
+        <div><small>EXECUTION LADDER</small><h2>Know exactly what has been proven.</h2></div>
+        <span className="execution-browser"><i>01</i><b>Browser simulation</b><small>Learn and inspect the concept anywhere.</small></span>
+        <span className="execution-static"><i>02</i><b>Static QML check</b><small>Structure and diagnostics without a compositor.</small></span>
+        <span className="execution-runtime"><i>03</i><b>Linux runtime</b><small>Real Quickshell + Wayland evidence required.</small></span>
       </section>
 
       <section className="forge-ribbon">
@@ -1747,11 +1803,22 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
       </section>
 
       <section className="world-map">
-        <header><div><span className="eyebrow">THE JOURNEY</span><h2>Six worlds. One living shell.</h2></div><p>Later worlds unlock as you clear quests. You can still preview any lesson—this path guides rather than punishes.</p></header>
+        <header><div><span className="eyebrow">THE SHELLCRAFT ATLAS</span><h2>Five maps. One production shell.</h2></div><p>Each capstone opens a deeper map. Preview access stays open—the route guides your practice without hiding the curriculum.</p></header>
+        <nav className="campaign-selector" aria-label="Campaign maps">
+          {atlasCampaigns.map(item => {
+            const mapWorldIndexes = worlds.map((world, index) => ({ world, index })).filter(entry => entry.world.campaign === item.number).map(entry => entry.index);
+            const mapQuests = quests.filter(quest => mapWorldIndexes.includes(quest.world));
+            const done = mapQuests.filter(quest => completed.includes(quest.id)).length;
+            return <button key={item.id} className={selectedCampaign === item.number ? "selected" : ""} onClick={() => chooseCampaign(item.number)} aria-pressed={selectedCampaign === item.number}>
+              <i>{String(item.number).padStart(2, "0")}</i><span><b>{item.name}</b><small>{done}/{mapQuests.length} quests · {item.subtitle}</small></span>
+            </button>;
+          })}
+        </nav>
         <div className="illustrated-map">
-          <img src="/world-map.png" alt="Illustrated QML Shellcraft map with six connected regions" />
+          <img src={campaignImages[selectedCampaign]} alt={`Illustrated ${campaign.name} map with six connected regions`} />
           <span className="map-instruction">Choose a region</span>
-          {worlds.map((world, worldIndex) => {
+          {campaignWorlds.map(world => {
+            const worldIndex = world.index;
             const worldQuests = quests.filter(quest => quest.world === worldIndex);
             const done = worldQuests.filter(quest => completed.includes(quest.id)).length;
             const isNext = worldIndex === nextQuest.world;
@@ -1759,11 +1826,11 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
               <button
                 className={`map-node world-${world.color} ${selectedWorld === worldIndex ? "selected" : ""} ${done === worldQuests.length ? "done" : ""} ${isNext ? "next" : ""}`}
                 style={{ left: `${world.mapX}%`, top: `${world.mapY}%` }}
-                key={world.name}
+                key={world.regionId}
                 onClick={() => setSelectedWorld(worldIndex)}
                 aria-label={`Explore ${world.name}, ${done} of ${worldQuests.length} quests complete`}
               >
-                <i>{done === worldQuests.length ? "✓" : worldIndex + 1}</i>
+                <i>{worldQuests.length > 0 && done === worldQuests.length ? "✓" : world.order}</i>
                 <span><b>{world.name}</b><small>{done}/{worldQuests.length} cleared</small></span>
               </button>
             );
@@ -1803,9 +1870,10 @@ export default function Home() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [navOpen, setNavOpen] = useState(false);
   const [forgeOpen, setForgeOpen] = useState(false);
+  const [selectedForgeFile, setSelectedForgeFile] = useState("shell.qml");
   const [quickQuizOpen, setQuickQuizOpen] = useState(false);
   const [quickQuizPhase, setQuickQuizPhase] = useState<QuickQuizPhase>("ready");
-  const [quickQuizScope, setQuickQuizScope] = useState<QuickQuizScope>("path");
+  const [quickQuizScope, setQuickQuizScope] = useState<QuickQuizScope>("journey");
   const [quickQuizItems, setQuickQuizItems] = useState<QuickQuizItem[]>([]);
   const [quickQuizStep, setQuickQuizStep] = useState(0);
   const [quickQuizAnswers, setQuickQuizAnswers] = useState<number[]>([]);
@@ -1814,6 +1882,7 @@ export default function Home() {
   const [quickQuizRunBestStreak, setQuickQuizRunBestStreak] = useState(0);
   const [quickQuizBest, setQuickQuizBest] = useState(0);
   const [quickQuizRuns, setQuickQuizRuns] = useState(0);
+  const [mastery, setMastery] = useState<MasteryState>({});
   const [lessonMode, setLessonMode] = useState<LessonMode>("split");
   const [importStatus, setImportStatus] = useState("");
   const [celebration, setCelebration] = useState(false);
@@ -1825,7 +1894,9 @@ export default function Home() {
   const quest = quests[questIndex];
   const code = codes[quest.id] ?? quest.starter;
   const checkResults = useMemo(() => quest.checks.map(check => check.test(code)), [quest, code]);
-  const allChecksPass = checkResults.every(Boolean);
+  const diagnostics = useMemo(() => analyzeQml(code), [code]);
+  const syntaxPass = !hasBlockingDiagnostics(diagnostics);
+  const allChecksPass = checkResults.every(Boolean) && syntaxPass;
   const quizSet = useMemo(() => quizSetFor(quest), [quest]);
   const questQuizAnswers = quizSet.map((_, index) => quizAnswers[`${quest.id}:${index}`] ?? (index === 0 ? quizAnswers[quest.id] : undefined));
   const quizResults = quizSet.map((quiz, index) => questQuizAnswers[index] === quiz.answer);
@@ -1838,10 +1909,11 @@ export default function Home() {
   const levelFloor = (level - 1) * 450;
   const levelProgress = level === 7 ? 100 : Math.min(100, ((xp - levelFloor) / 450) * 100);
   const unlockedArtifacts = forgeArtifacts.filter(artifact => completed.includes(artifact.questId));
-  const forgeFiles = useMemo(() => forgeProjectFiles(completed, codes), [completed, codes]);
+  const forgeFiles = useMemo(() => createForgeProject(completed, codes, { projectName: "My Living Shell", applyLearnerSources: false }), [completed, codes]);
   const quickQuizItem = quickQuizItems[quickQuizStep];
   const quickQuizAnswer = quickQuizAnswers[quickQuizStep];
   const quickQuizAnswered = quickQuizAnswer !== undefined;
+  const activeCampaign = quest.campaign ?? 0;
 
   const openQuest = (index: number) => {
     setQuestIndex(Math.max(0, index)); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
@@ -1851,7 +1923,7 @@ export default function Home() {
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
       try {
-        const saved = JSON.parse(localStorage.getItem(storageKey) ?? "{}");
+        const saved = JSON.parse(localStorage.getItem(storageKey) ?? localStorage.getItem(legacyStorageKey) ?? "{}");
         if (Array.isArray(saved.completed)) setCompleted(saved.completed);
         if (saved.codes) setCodes(current => ({ ...current, ...saved.codes }));
         if (saved.quizAnswers) setQuizAnswers(saved.quizAnswers);
@@ -1859,6 +1931,7 @@ export default function Home() {
         if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
         if (Number.isInteger(saved.quickQuizBest)) setQuickQuizBest(Math.max(0, Math.min(5, saved.quickQuizBest)));
         if (Number.isInteger(saved.quickQuizRuns)) setQuickQuizRuns(Math.max(0, saved.quickQuizRuns));
+        setMastery(normalizeMastery(saved.mastery));
       } catch { /* local progress must never block the course */ }
       setHydrated(true);
     });
@@ -1866,8 +1939,8 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns }));
-  }, [completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, hydrated]);
+    if (hydrated) localStorage.setItem(storageKey, JSON.stringify({ version: 5, completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, mastery }));
+  }, [completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, mastery, hydrated]);
 
   const openQuickQuiz = () => {
     setNavOpen(false);
@@ -1877,20 +1950,20 @@ export default function Home() {
   };
 
   const startQuickQuiz = () => {
-    const pool = quickQuizScope === "all" ? [...quests] : quests.filter(item => completed.includes(item.id));
-    if (quickQuizScope === "path") {
-      const nextIndex = quests.findIndex(item => !completed.includes(item.id));
-      const frontier = quests.slice(0, Math.max(5, nextIndex === -1 ? quests.length : nextIndex + 1));
-      frontier.forEach(item => { if (!pool.some(entry => entry.id === item.id)) pool.push(item); });
-      quests.forEach(item => { if (pool.length < 5 && !pool.some(entry => entry.id === item.id)) pool.push(item); });
-    }
-    const kindOffset = Math.floor(Math.random() * 3);
+    const selected = selectReviewCandidates(
+      quests.map(item => ({ id: item.id, campaign: item.campaign ?? 0, boss: item.boss, prerequisites: item.prerequisites, conceptIds: item.conceptTags })),
+      mastery,
+      quickQuizScope,
+      { completed: new Set(completed), activeCampaign },
+    );
+    const pool = selected.map(candidate => quests.find(item => item.id === candidate.id)).filter((item): item is Quest => Boolean(item));
+    quests.forEach(item => { if (pool.length < 5 && !pool.some(entry => entry.id === item.id)) pool.push(item); });
     const items = shuffled(pool).slice(0, 5).map((item, index) => ({
       questId: item.id,
       questIndex: quests.findIndex(questItem => questItem.id === item.id),
       world: item.world,
       questTitle: item.title,
-      quiz: quizSetFor(item)[(index + kindOffset) % 3],
+      quiz: item.quizBank?.length ? item.quizBank[index % item.quizBank.length] : quizSetFor(item)[index % 3],
     }));
     setQuickQuizItems(items);
     setQuickQuizStep(0);
@@ -1903,6 +1976,9 @@ export default function Home() {
 
   const answerQuickQuiz = (optionIndex: number) => {
     if (!quickQuizItem || quickQuizAnswered || quickQuizPhase !== "playing") return;
+    const sourceQuest = quests[quickQuizItem.questIndex];
+    const conceptId = sourceQuest?.conceptTags?.[0] ?? quickQuizItem.questId;
+    setMastery(current => recordAnswer(current, conceptId, optionIndex === quickQuizItem.quiz.answer));
     setQuickQuizAnswers(current => {
       const next = [...current];
       next[quickQuizStep] = optionIndex;
@@ -1950,6 +2026,23 @@ export default function Home() {
 
   const updateCode = (value: string) => { setCodes(current => ({ ...current, [quest.id]: value })); setChecked(false); };
 
+  const answerQuestQuiz = (quizIndex: number, optionIndex: number) => {
+    const answerKey = `${quest.id}:${quizIndex}`;
+    setQuizAnswers(current => ({ ...current, [answerKey]: optionIndex }));
+    const conceptId = quest.conceptTags?.[quizIndex % Math.max(1, quest.conceptTags.length)] ?? quest.id;
+    setMastery(current => recordAnswer(current, conceptId, optionIndex === quizSet[quizIndex].answer));
+  };
+
+  const toggleHint = () => {
+    if (!hintOpen) setMastery(current => recordSupportUse(current, quest.conceptTags?.[0] ?? quest.id, "hint"));
+    setHintOpen(value => !value);
+  };
+
+  const toggleSolution = () => {
+    if (!solutionOpen) setMastery(current => recordSupportUse(current, quest.conceptTags?.[0] ?? quest.id, "solution"));
+    setSolutionOpen(value => !value);
+  };
+
   const syncEditorScroll = (target: HTMLTextAreaElement) => {
     if (!highlightRef.current) return;
     highlightRef.current.scrollTop = target.scrollTop;
@@ -1980,7 +2073,7 @@ export default function Home() {
   };
 
   const exportProgress = () => {
-    const payload = JSON.stringify({ version: 4, exportedAt: new Date().toISOString(), completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns }, null, 2);
+    const payload = JSON.stringify({ version: 5, exportedAt: new Date().toISOString(), completed, codes, quizAnswers, notes, lessonMode, quickQuizBest, quickQuizRuns, mastery }, null, 2);
     downloadBlob(new Blob([payload], { type: "application/json" }), "qml-shellcraft-progress.json");
   };
 
@@ -1998,6 +2091,7 @@ export default function Home() {
       if (["learn", "split", "build"].includes(saved.lessonMode)) setLessonMode(saved.lessonMode);
       if (Number.isInteger(saved.quickQuizBest)) setQuickQuizBest(Math.max(0, Math.min(5, saved.quickQuizBest)));
       if (Number.isInteger(saved.quickQuizRuns)) setQuickQuizRuns(Math.max(0, saved.quickQuizRuns));
+      setMastery(normalizeMastery(saved.mastery));
       setImportStatus("Progress restored on this device.");
     } catch {
       setImportStatus("That file is not a valid Shellcraft progress export.");
@@ -2100,7 +2194,8 @@ export default function Home() {
   };
 
   return (
-    <main className={`adventure-shell ${view === "map" ? "map-mode" : "quest-mode"} lesson-${lessonMode}`}>
+    <main id="course-content" tabIndex={-1} className={`adventure-shell ${view === "map" ? "map-mode" : "quest-mode"} lesson-${lessonMode}`}>
+      <a className="skip-link" href="#course-content">Skip to course content</a>
       <header className="hud">
         <button className="brand" onClick={() => setView("map")} aria-label="Open world map"><CoreMark level={level} /><span><b>QML SHELLCRAFT</b><small>zero → hero adventure</small></span></button>
         <nav><button className={view === "map" ? "active" : ""} onClick={() => setView("map")}>World map</button><button className={view === "quest" ? "active" : ""} onClick={() => setView("quest")}>Current quest</button>{view === "quest" && <span className="mode-switcher" aria-label="Lesson focus mode">{(["learn", "split", "build"] as LessonMode[]).map(mode => <button key={mode} className={lessonMode === mode ? "selected" : ""} onClick={() => setLessonMode(mode)} aria-pressed={lessonMode === mode}>{mode}</button>)}</span>}</nav>
@@ -2124,7 +2219,7 @@ export default function Home() {
           <section className="lesson-scroll">
             <article className="lesson-body">
               <header className="lesson-hero">
-                <div className="quest-meta"><span>{quest.boss ? "BOSS QUEST" : `QUEST ${String(questIndex + 1).padStart(2, "0")}`}</span><i>{quest.minutes} min</i><i>+{quest.xp} XP</i></div>
+                <div className="quest-meta"><span>{quest.boss ? "BOSS QUEST" : quest.sideQuest ? "SIDE QUEST" : `QUEST ${String(questIndex + 1).padStart(3, "0")}`}</span><i>{quest.minutes} min</i><i>+{quest.xp} XP</i><i>{masteryPercent(mastery[quest.conceptTags?.[0] ?? quest.id])}% mastery</i><i className={`execution-tier tier-${quest.executionTier ?? "browser"}`}>{quest.executionTier === "runtime" ? "Linux runtime" : quest.executionTier === "static" ? "Static QML check" : "Browser simulation"}</i></div>
                 <p className="lesson-kicker">{quest.subtitle}</p>
                 <h1>{quest.title}</h1>
                 <p className="lesson-objective">{quest.objective}</p>
@@ -2156,7 +2251,7 @@ export default function Home() {
                     return <div className={`quiz-card ${answer !== undefined ? (correct ? "correct" : "incorrect") : ""}`} key={answerKey}>
                       <div className="quiz-progress"><span>SIGNAL {quizIndex + 1} · {quiz.kind}</span><i>{correct ? "LOCKED ✓" : `${quizIndex + 1} / ${quizSet.length}`}</i></div>
                       <p>{quiz.question}</p>
-                      <div className="quiz-options">{quiz.options.map((option, optionIndex) => <button key={option} className={answer === optionIndex ? "selected" : ""} onClick={() => setQuizAnswers(current => ({ ...current, [answerKey]: optionIndex }))}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span></button>)}</div>
+                      <div className="quiz-options">{quiz.options.map((option, optionIndex) => <button key={option} className={answer === optionIndex ? "selected" : ""} onClick={() => answerQuestQuiz(quizIndex, optionIndex)}><i>{String.fromCharCode(65 + optionIndex)}</i><span>{option}</span></button>)}</div>
                       {answer !== undefined && <aside><b>{correct ? "Mental model locked in" : "Not quite—use this clue"}</b><p>{quiz.explanation}</p></aside>}
                     </div>;
                   })}
@@ -2170,7 +2265,7 @@ export default function Home() {
 
           <aside className="lab-dock">
             <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(questIndex + 1).padStart(2, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
-            <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p><img src="/qml-build-lab.png" alt="Illustrated reactive QML component workbench" /></section>
+            <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p><img src="/qml-build-lab.jpg" alt="Illustrated reactive QML component workbench" /></section>
             <section className="preview-wrap"><div><span>CONCEPT PREVIEW</span><small>tap to change state</small></div><ScenePreview quest={quest} code={code} /></section>
             <section className="code-editor">
               <div className="editor-top"><span>QML</span><b className="smart-indent">syntax · smart indent · auto-pairs</b><small>browser checks · render for real in Quickshell</small></div>
@@ -2179,14 +2274,15 @@ export default function Home() {
                 <div className="line-numbers">{code.split("\n").map((_, index) => <i key={index}>{index + 1}</i>)}</div>
                 <div className="editor-surface"><pre ref={highlightRef} aria-hidden="true"><code>{qmlHighlight(code)}{"\n"}</code></pre><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} onScroll={event => syncEditorScroll(event.currentTarget)} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div>
               </div>
-              {checked && !allChecksPass && <div className="editor-diagnostic" role="status"><i>!</i><span><b>{quest.checks.find((_, index) => !checkResults[index])?.label}</b><small>{quest.checks.find((_, index) => !checkResults[index])?.hint}</small></span></div>}
+              {checked && diagnostics.length > 0 && <div className="editor-diagnostic diagnostic-stack" role="status"><i>!</i><span>{diagnostics.slice(0, 3).map(diagnostic => <span key={`${diagnostic.line}-${diagnostic.message}`}><b>Line {diagnostic.line} · {diagnostic.message}</b><small>{diagnostic.hint}</small></span>)}</span></div>}
+              {checked && syntaxPass && !checkResults.every(Boolean) && <div className="editor-diagnostic" role="status"><i>!</i><span><b>{quest.checks.find((_, index) => !checkResults[index])?.label}</b><small>{quest.checks.find((_, index) => !checkResults[index])?.hint}</small></span></div>}
             </section>
             <section className="gate-panel">
-              <div className="gate-heading"><div><span>MASTERY GATE</span><small aria-live="polite">{checkResults.filter(Boolean).length}/{checkResults.length} code checks · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={() => setHintOpen(value => !value)}>Hint</button></div>
+              <div className="gate-heading"><div><span>MASTERY GATE</span><small aria-live="polite">{checkResults.filter(Boolean).length}/{checkResults.length} code checks · syntax {syntaxPass ? "clean" : "blocked"} · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={toggleHint}>Hint</button></div>
               <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}{checked && !checkResults[index] && <small>{check.hint}</small>}</span></div>)}</div>
               {hintOpen && <aside className="hint"><b>CORE CLUE</b>{quest.checks.find((_, index) => !checkResults[index])?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}</aside>}
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
-              <div className="gate-actions"><button className="solution-trigger" onClick={() => setSolutionOpen(value => !value)}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
+              <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className="claim-quest" onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
             </section>
             <footer><button disabled={questIndex === 0} onClick={() => openQuest(questIndex - 1)}>←</button><span>Alt + arrows navigate</span><button disabled={questIndex === quests.length - 1} onClick={() => openQuest(questIndex + 1)}>→</button></footer>
           </aside>
@@ -2197,9 +2293,9 @@ export default function Home() {
         <header className="quick-quiz-header"><div className="quick-quiz-mark"><i /><i /><b>Q5</b></div><div><small>CORE DRILL · PRACTICE MODE</small><h2>Quick quiz</h2><p>Five signals. Two minutes. Find the idea that needs another look.</p></div><button onClick={() => setQuickQuizOpen(false)} aria-label="Close quick quiz">×</button></header>
 
         {quickQuizPhase === "ready" && <div className="quick-quiz-ready">
-          <div className="quick-quiz-intro"><figure className="quick-quiz-art"><img src="/quick-quiz-arena.png" alt="Five connected challenge platforms orbiting a glowing violet Core" /><figcaption>THE FIVE-SIGNAL ARENA</figcaption></figure><div><small>HOW IT WORKS</small><h3>Wake the Core in five moves.</h3><p>Each run mixes mental models, code detective work, and design transfer. Answers appear immediately; mistakes become links back to the exact lesson.</p></div></div>
-          <div className="quick-quiz-scope" aria-label="Quiz question pool"><button className={quickQuizScope === "path" ? "selected" : ""} onClick={() => setQuickQuizScope("path")} aria-pressed={quickQuizScope === "path"}><i>PATH</i><span><b>My journey</b><small>{completed.length ? "Review mastered and nearby concepts" : "Begin with the first world"}</small></span></button><button className={quickQuizScope === "all" ? "selected" : ""} onClick={() => setQuickQuizScope("all")} aria-pressed={quickQuizScope === "all"}><i>∞</i><span><b>All worlds</b><small>Pull from the complete curriculum</small></span></button></div>
-          <div className="quick-quiz-worlds" aria-hidden="true">{worlds.map((world, index) => <span key={world.name} className={`world-${world.color}`}><WorldGlyph index={index} /><i /></span>)}</div>
+          <div className="quick-quiz-intro"><figure className="quick-quiz-art"><img src="/quick-quiz-arena.jpg" alt="Five connected challenge platforms orbiting a glowing violet Core" /><figcaption>THE FIVE-SIGNAL ARENA</figcaption></figure><div><small>HOW IT WORKS</small><h3>Wake the Core in five moves.</h3><p>Each run mixes mental models, code detective work, and design transfer. Answers appear immediately; mistakes become links back to the exact lesson.</p></div></div>
+          <div className="quick-quiz-scope mastery-modes" aria-label="Quiz practice mode">{reviewModes.map(mode => <button key={mode.id} className={quickQuizScope === mode.id ? "selected" : ""} onClick={() => setQuickQuizScope(mode.id)} aria-pressed={quickQuizScope === mode.id}><i>{mode.code}</i><span><b>{mode.label}</b><small>{mode.description}</small></span></button>)}</div>
+          <div className="quick-quiz-worlds" aria-hidden="true">{atlasCampaigns.map((campaign, index) => <span key={campaign.id} className={`world-${worlds[index * 6]?.color ?? "violet"}`}><WorldGlyph index={index} /><i /></span>)}</div>
           <div className="quick-quiz-record"><span><small>PERSONAL BEST</small><b>{quickQuizBest}/5</b></span><span><small>RUNS FINISHED</small><b>{quickQuizRuns}</b></span><em>Practice only · quest XP stays honest</em></div>
           <button className="quick-quiz-start" onClick={startQuickQuiz}><span>Start the signal run</span><i>1–4 answer · Enter advances</i><b>→</b></button>
         </div>}
@@ -2230,8 +2326,12 @@ export default function Home() {
       {forgeOpen && <div className="forge-backdrop"><button className="forge-dismiss" onClick={() => setForgeOpen(false)} aria-label="Close the Forge" /><aside className="forge-panel" role="dialog" aria-modal="true" aria-label="Shell Forge project">
         <header><div className="forge-panel-mark"><i /><i /><b>FG</b></div><div><small>CUMULATIVE PROJECT</small><h2>Shell Forge</h2><p>Every mastered system becomes a reusable part of your real shell.</p></div><button onClick={() => setForgeOpen(false)} aria-label="Close the Forge">×</button></header>
         <section className="forge-progress"><div><span><i style={{ width: `${(unlockedArtifacts.length / forgeArtifacts.length) * 100}%` }} /></span><b>{unlockedArtifacts.length}/{forgeArtifacts.length} artifacts forged</b></div><small>{completed.length}/{quests.length} quests mastered · {Object.keys(forgeFiles).length} project files</small></section>
-        <figure className="forge-vista"><img src="/shell-forge-workshop.png" alt="Golden floating workshop connecting shell modules around a central forge" /><figcaption><small>THE WORKSHOP</small><b>Each lesson feeds the same living system.</b><span>Components, services, state, screens, and motion converge here.</span></figcaption></figure>
-        <section className="forge-project"><div><small>RUNNABLE STARTER</small><h3>My living shell</h3><p>The bundle contains a screen-aware Quickshell bar, local run instructions, editor configuration, and one practice file for every mastered quest.</p><div className="forge-actions"><button className="forge-download" onClick={exportForgeProject}>Download project <i>.tar.gz</i></button><button onClick={exportProgress}>Export progress</button><button onClick={() => importRef.current?.click()}>Import progress</button><input ref={importRef} type="file" accept="application/json" onChange={importProgress} /></div>{importStatus && <span className="import-status" role="status">{importStatus}</span>}</div><ol aria-label="Generated project files">{Object.keys(forgeFiles).slice(0, 7).map(file => <li key={file}><i>{file.endsWith(".qml") ? "Q" : file.endsWith(".md") ? "M" : "C"}</i><span>{file}</span></li>)}</ol></section>
+        <figure className="forge-vista"><img src="/shell-forge-workshop.jpg" alt="Golden floating workshop connecting shell modules around a central forge" /><figcaption><small>THE WORKSHOP</small><b>Each lesson feeds the same living system.</b><span>Components, services, state, screens, and motion converge here.</span></figcaption></figure>
+        <section className="forge-project"><div><small>INTEGRATED PROJECT</small><h3>My living shell</h3><p>The bundle is one coherent Quickshell file graph: per-screen surfaces, shared services, typed state, configuration, IPC routes, degraded states, validation, and attribution. Browser work is preparation; Linux/Wayland proves runtime behaviour.</p><div className="forge-actions"><button className="forge-download" onClick={exportForgeProject}>Download project <i>.tar.gz</i></button><button onClick={exportProgress}>Export progress</button><button onClick={() => importRef.current?.click()}>Import progress</button><input ref={importRef} type="file" accept="application/json" onChange={importProgress} /></div>{importStatus && <span className="import-status" role="status">{importStatus}</span>}</div><ol aria-label="Generated project highlights">{Object.keys(forgeFiles).slice(0, 7).map(file => <li key={file}><i>{file.endsWith(".qml") ? "Q" : file.endsWith(".md") ? "M" : "C"}</i><span>{file}</span></li>)}</ol></section>
+        <section className="forge-file-browser" aria-label="Forge project file browser">
+          <nav aria-label="Project files">{Object.keys(forgeFiles).sort().map(file => <button key={file} className={selectedForgeFile === file ? "selected" : ""} onClick={() => setSelectedForgeFile(file)}><i>{file.endsWith(".qml") ? "Q" : file.endsWith(".md") ? "M" : file.endsWith(".json") ? "J" : "·"}</i><span>{file}</span></button>)}</nav>
+          <article><header><span>FORGE FILE</span><b>{selectedForgeFile}</b><small>{(forgeFiles[selectedForgeFile] ?? "").split("\n").length} lines</small></header><pre><code>{forgeFiles[selectedForgeFile] ?? "Choose a generated project file."}</code></pre></article>
+        </section>
         <section className="artifact-section"><div className="forge-section-title"><span>ARTIFACT INVENTORY</span><p>Unlocks follow the architecture of a living shell: composition → components → state → services → screens → validation.</p></div><div className="artifact-grid">{forgeArtifacts.map((artifact, index) => {
           const unlocked = completed.includes(artifact.questId);
           const questIndexForArtifact = quests.findIndex(item => item.id === artifact.questId);
