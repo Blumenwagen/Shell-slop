@@ -1814,7 +1814,7 @@ function MapView({ completed, onOpenQuest, onOpenForge, onOpenQuickQuiz }: { com
             </button>;
           })}
         </nav>
-        <div className="illustrated-map">
+        <div className={`illustrated-map ${selectedCampaign === 1 ? "map-wide" : "map-atlas"}`}>
           <img src={campaignImages[selectedCampaign]} alt={`Illustrated ${campaign.name} map with six connected regions`} />
           <span className="map-instruction">Choose a region</span>
           {campaignWorlds.map(world => {
