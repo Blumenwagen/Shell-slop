@@ -12,7 +12,7 @@ The course contains five illustrated maps and roughly 160 quests:
 4. **Expression Expanse** — topology, colour, typography, iconography, motion, responsive states, and visual critique.
 5. **Production Citadel** — architecture, performance, resilience, security, validation, packaging, and release.
 
-Each quest moves through motivation, explanation, tracing, prediction, repair, building, transfer, and reflection. Six authored quiz signals, structural QML diagnostics, spaced review modes, boss incidents, and a cumulative Forge project turn progress into evidence rather than XP grinding.
+Each quest moves through motivation, explanation, tracing, prediction, repair, building, transfer, and reflection. Six quiz formats per quest (generated from each quest's own concepts, with cross-quest distractors), comment-aware structural QML checks, spaced review modes, boss incidents, and an exportable Forge scaffold turn progress into evidence rather than XP grinding. The Forge export is a fixed, production-quality starting scaffold; learners integrate their own quest work into it themselves.
 
 ## Runtime truth
 
@@ -47,7 +47,7 @@ npm run lint
 - `app/course/atlas.ts` — typed five-map curriculum and authored assessment banks.
 - `app/course/editor.ts` — browser-safe structural QML diagnostics.
 - `app/course/mastery.ts` — concept mastery and spaced-review selection.
-- `app/course/forge.ts` — cumulative, exportable Quickshell project generator.
+- `app/course/forge.ts` — exportable Quickshell project scaffold generator (canned templates; learner sources applied only via `applyLearnerSources`).
 - `public/` — illustrated maps and learning art.
 - `DEVELOPMENT_PLAN.md` — product direction, remaining milestones, and release gates.
 

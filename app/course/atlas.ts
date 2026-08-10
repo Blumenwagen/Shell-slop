@@ -7,6 +7,8 @@
  * linux-wayland-runtime tier may ask for live Quickshell/compositor evidence.
  */
 
+import { ATLAS_EXERCISES } from "./exercises/index.ts";
+
 export type CampaignNumber = 1 | 2 | 3 | 4 | 5;
 export type ExecutionTier = "browser-simulation" | "static-qml-check" | "linux-wayland-runtime";
 export type QuizFormat =
@@ -219,6 +221,15 @@ type Blueprint = {
   executionTier?: ExecutionTier;
   boss?: boolean;
   sideQuest?: boolean;
+  /**
+   * Quest-specific exercise overrides. Recipes are generic; when a quest's
+   * stated lesson (e.g. brace repair, binding loops) is not what its recipe
+   * exercises, author the starter/solution/checks here so the mastery gate
+   * tests what the quest actually teaches.
+   */
+  starter?: (label: string) => string;
+  solution?: (label: string) => string;
+  checks?: [StructuralCheckSpec, StructuralCheckSpec, StructuralCheckSpec];
 };
 
 type Recipe = {
@@ -392,7 +403,7 @@ const RECIPES: Record<RecipeId, Recipe> = {
     a11y: "Announce result-count changes without moving keyboard focus unexpectedly.",
     security: "Filter and rank data without executing provider text or leaking private entries into logs.",
     starter: () => `import Quickshell\n\nListView { model: source.values.filter(value => value.visible) }`,
-    solution: () => `import Quickshell\n\nScriptModel {\n    id: filtered\n    values: source.values\n        .filter(value => value.visible)\n        .sort((a, b) => a.rank - b.rank)\n}\n\nListView { model: filtered }`,
+    solution: () => `import QtQuick\nimport Quickshell\n\nItem {\n    ScriptModel {\n        id: filtered\n        values: source.values\n            .filter(value => value.visible)\n            .sort((a, b) => a.rank - b.rank)\n    }\n\n    ListView {\n        anchors.fill: parent\n        model: filtered\n    }\n}`,
     checks: checks(["Stable model", "Use ScriptModel for derived changing data.", "ScriptModel\\s*\\{"], ["Derived values", "Bind its values to a filter or sort.", "values\\s*:[\\s\\S]*\\.(?:filter|sort)\\s*\\("], ["View consumes model", "Bind the view to the ScriptModel id.", "model\\s*:\\s*filtered"]),
   },
   "domain-view": {
@@ -531,7 +542,7 @@ const s = (
   regionId: string, recipe: RecipeId, id: string, title: string, subtitle: string, objective: string,
   focus: string, mechanism: string, failure: string, analogy: string,
   rules: [string, string, string], termKeys: [string, string, string], tags: string[],
-  options: Pick<Blueprint, "prerequisiteIds" | "executionTier" | "boss" | "sideQuest"> = {},
+  options: Pick<Blueprint, "prerequisiteIds" | "executionTier" | "boss" | "sideQuest" | "starter" | "solution" | "checks"> = {},
 ): Blueprint => seed({ regionId, recipe, id, title, subtitle, objective, focus, mechanism, failure, analogy, rules, termKeys, tags, ...options });
 
 type CompactBlueprint = [
@@ -561,13 +572,39 @@ const rawSeeds: Blueprint[] = [
   // Campaign I: 24 additions. Combined with the original 26, Awakening reaches 50 quests.
   s("first-sparks", "qml-object", "grammar-error-compass", "Follow the brace trail", "Grammar, imports, and useful error messages", "Read a small QML file, locate the object an error belongs to, and repair its braces without guessing.",
     "QML grammar is a nested object description: imports select toolboxes, a type name starts an object, and braces delimit its body.", "Read from the reported line outward, match every opening brace with its owner, then verify that each property uses a colon and each child starts with a type.", "Fixing only the highlighted line can leave the real mistake above it; parsers often notice a missing brace only when the next valid token arrives.", "following colored hiking markers back to the fork where the wrong turn began",
-    ["Match braces from the root outward.", "Use the first parser error as a clue, not a verdict.", "Recheck imports and property colons before changing behaviour."], ["import", "object", "scope"], ["qml", "grammar", "diagnostics"], { prerequisiteIds: ["qml-is-a-description"] }),
+    ["Match braces from the root outward.", "Use the first parser error as a clue, not a verdict.", "Recheck imports and property colons before changing behaviour."], ["import", "object", "scope"], ["qml", "grammar", "diagnostics"], {
+      prerequisiteIds: ["qml-is-a-description"],
+      starter: () => `import QtQuick\n\nItem {\n    id: root\n    width 280\n    height: 96\n\n    Rectangle {\n        anchors.fill: parent\n        radius: 12\n        color: "#272331"\n\n    Text {\n        anchors.centerIn: parent\n        text: "Repair me"\n    }\n}`,
+      solution: () => `import QtQuick\n\nItem {\n    id: root\n    width: 280\n    height: 96\n\n    Rectangle {\n        anchors.fill: parent\n        radius: 12\n        color: "#272331"\n    }\n\n    Text {\n        anchors.centerIn: parent\n        text: "Repair me"\n    }\n}`,
+      checks: checks(
+        ["Give width its colon", "A property is name, colon, value: width: 280.", "width\\s*:\\s*280"],
+        ["Free the trapped Text", "Rectangle is missing its closing brace, so Text is accidentally nested inside it. Close Rectangle so Text becomes a sibling.", "Rectangle\\s*\\{[^{}]*\\}[\\s\\S]*Text\\s*\\{"],
+        ["Close every object", "Every opening brace needs an owner-matched closing brace; the file must end by closing Item.", "Text\\s*\\{[^{}]*\\}\\s*\\}\\s*$"],
+      ),
+    }),
   s("first-sparks", "qml-values", "value-toolchest", "Pack the value toolchest", "Numbers, text, choices, and missing data", "Choose precise QML types for numbers, strings, booleans, colours, URLs, enums, lists, null, and undefined.",
     "A property type is a promise about what a value means, which makes tools and later readers able to catch category mistakes.", "Use bool for two-state policy, numeric types for measurements, color and url for domain values, enums for fixed choices, and typed lists for collections.", "A broad var can hide misspellings and nullish values until a binding renders nonsense, so every optional value needs a deliberate fallback.", "packing labelled drawers so a battery percentage never ends up in the wallpaper drawer",
-    ["Prefer the narrowest useful property type.", "Handle null and undefined before formatting.", "Use enums when only named choices are valid."], ["type", "enum", "nullish"], ["qml", "types", "values"]),
+    ["Prefer the narrowest useful property type.", "Handle null and undefined before formatting.", "Use enums when only named choices are valid."], ["type", "enum", "nullish"], ["qml", "types", "values"], {
+      starter: () => `import QtQml\n\nQtObject {\n    property var accent\n    property var icon\n    property var names\n    property var summary\n}`,
+      solution: () => `import QtQml\n\nQtObject {\n    property color accent: "#8b7cff"\n    property url icon: "file:///usr/share/icons/battery.svg"\n    property int count: 3\n    property bool available: true\n    property list<string> names: ["bar", "drawer", "launcher"]\n    property var pending: null\n    readonly property string summary: available ? names[0] + " ×" + count : "Unavailable"\n}`,
+      checks: checks(
+        ["Domain value types", "Give the accent a color type and the icon a url type instead of var.", "property\\s+color\\s+\\w+[\\s\\S]*property\\s+url\\s+\\w+"],
+        ["Typed list", "Declare the names as property list<string>.", "property\\s+list<[^>]+>\\s+\\w+"],
+        ["Deliberate fallback", "Derive a readonly summary that handles the unavailable case with ?: or ??.", "readonly\\s+property\\s+\\w+\\s+\\w+\\s*:[^\\n]*(?:\\?\\?|\\?[^\\n]*:)"],
+      ),
+    }),
   s("first-sparks", "qml-object", "binding-repair-clinic", "Repair the reactive circuit", "Assignments, loops, and lost bindings", "Trace a dependency graph and repair a broken or looping binding while preserving one source of truth.",
     "Bindings form directed dependencies, so a view property should read authoritative state rather than copy another derived result.", "Mark each value as source or derived, follow arrows from inputs to outputs, and replace event-handler copies with expressions wherever the relationship must stay live.", "Assigning to a bound property removes its expression, while two properties that derive from each other create a loop with no stable owner.", "rewiring a signal circuit so current flows one way from the battery instead of chasing itself around a ring",
-    ["Draw dependency arrows before editing.", "Assign only authoritative intent from events.", "Break every cycle by choosing one source of truth."], ["binding", "dependency", "validation"], ["qml", "bindings", "debugging"], { sideQuest: true }),
+    ["Draw dependency arrows before editing.", "Assign only authoritative intent from events.", "Break every cycle by choosing one source of truth."], ["binding", "dependency", "validation"], ["qml", "bindings", "debugging"], {
+      sideQuest: true,
+      starter: () => `import QtQuick\n\nItem {\n    id: root\n    property bool online: false\n    property string label: "offline"    // hand-updated copy of online\n    width: 280\n    height: 96\n\n    Text { anchors.centerIn: parent; text: root.label }\n\n    MouseArea {\n        anchors.fill: parent\n        onClicked: {\n            root.online = !root.online\n            root.label = root.online ? "online" : "offline"\n        }\n    }\n}`,
+      solution: () => `import QtQuick\n\nItem {\n    id: root\n    property bool online: false\n    readonly property string label: online ? "online" : "offline"\n    width: 280\n    height: 96\n\n    Text { anchors.centerIn: parent; text: root.label }\n\n    MouseArea {\n        anchors.fill: parent\n        onClicked: root.online = !root.online\n    }\n}`,
+      checks: checks(
+        ["Keep one source of truth", "online stays the only writable state.", "property\\s+bool\\s+online"],
+        ["Derive the label", "Make label a readonly binding on online instead of a hand-updated copy.", "readonly\\s+property\\s+string\\s+label\\s*:[^\\n]*online"],
+        ["Events touch only the source", "onClicked flips online and no longer assigns label.", "onClicked\\s*:(?![\\s\\S]*label\\s*=)[\\s\\S]*online\\s*=\\s*!"],
+      ),
+    }),
   s("first-sparks", "qml-contract", "lifetime-contract-lab", "Own state for exactly long enough", "Required inputs, readonly outputs, and lifetime", "Design a small component whose required inputs, derived outputs, id scope, and startup work have explicit owners.",
     "Required properties prevent an instance from entering the scene without the information its contract needs, while readonly properties expose facts consumers must not overwrite.", "Local ids connect objects inside one component, Component.onCompleted starts only work owned by that instance, and destruction must stop timers or asynchronous work it created.", "Using a global singleton to reach a local child or starting uncancelled work on completion makes reloads duplicate observers and leaves dead objects receiving results.", "issuing each workshop tool to one named bench and checking it back in when that bench closes",
     ["Require essential inputs at construction.", "Expose derived facts as readonly.", "Cancel instance-owned work when its lifetime ends."], ["scope", "lifetime", "type"], ["qml", "contracts", "lifetime"]),
@@ -814,23 +851,54 @@ const existingCampaignOneByRegion: Record<string, number> = {
   "hero-forge": 6,
 };
 
-const rotatedAnswer = (
+/** Deterministic FNV-1a hash so quiz layout is stable across sessions without being predictable. */
+const hashString = (value: string): number => {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+/** Seeded picks from a pool, excluding the correct answer, without repeats. */
+const pickFromPool = (pool: readonly string[], correct: string, seedValue: number, count: number): string[] => {
+  const candidates = [...new Set(pool)].filter(text => text !== correct);
+  const chosen: string[] = [];
+  let cursor = seedValue || 1;
+  while (chosen.length < count && candidates.length > 0) {
+    cursor = (Math.imul(cursor, 1664525) + 1013904223) >>> 0;
+    chosen.push(candidates.splice(cursor % candidates.length, 1)[0]);
+  }
+  return chosen;
+};
+
+const placeAnswer = (
   correct: string,
   distractors: [string, string, string],
-  position: number,
+  seedValue: number,
 ): { options: [string, string, string, string]; answer: 0 | 1 | 2 | 3 } => {
-  const answer = (position % 4) as 0 | 1 | 2 | 3;
+  const answer = (seedValue % 4) as 0 | 1 | 2 | 3;
   const options = [...distractors] as string[];
   options.splice(answer, 0, correct);
   return { options: options as [string, string, string, string], answer };
 };
 
+/**
+ * Distractors mix one stock anti-pattern with two statements drawn from OTHER
+ * quests/recipes. The stock triples used to be the full distractor set for all
+ * 134 quests, which let learners answer by recognizing the three memorized
+ * wrong strings; pool-drawn distractors force actual discrimination.
+ */
 const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): AtlasQuestSeed["quizzes"] => {
+  void questIndex;
+  const otherRecipes = Object.values(RECIPES);
   const definitions: Array<{
     format: QuizFormat;
     question: string;
     correct: string;
-    distractors: [string, string, string];
+    stock: [string, string, string];
+    pool: readonly string[];
     explanation: string;
     difficulty: 1 | 2 | 3;
   }> = [
@@ -838,7 +906,8 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "mental-model",
       question: `Which mental model should guide “${blueprint.title}”?`,
       correct: blueprint.focus,
-      distractors: ["Copy the screenshot first and decide ownership later.", "Store every visible result as independent mutable state.", "Let each delegate discover and poll the system for itself."],
+      stock: ["Copy the screenshot first and decide ownership later.", "Store every visible result as independent mutable state.", "Let each delegate discover and poll the system for itself."],
+      pool: rawSeeds.map(other => other.focus),
       explanation: `The governing model is specific to this quest: ${blueprint.focus}`,
       difficulty: 1,
     },
@@ -846,7 +915,8 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "code-detective",
       question: `Which structural clue in the solution best demonstrates “${blueprint.title}”?`,
       correct: recipe.structure,
-      distractors: ["a larger radius applied to every rectangle", "a browser animation with no state owner", "an untyped global value copied into several delegates"],
+      stock: ["a larger radius applied to every rectangle", "a browser animation with no state owner", "an untyped global value copied into several delegates"],
+      pool: otherRecipes.map(other => other.structure),
       explanation: `The starter-to-solution repair is designed around ${recipe.structure}.`,
       difficulty: 2,
     },
@@ -854,7 +924,8 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "design-transfer",
       question: `When transferring “${blueprint.title}” to another shell surface, which rule must survive?`,
       correct: blueprint.rules[1],
-      distractors: ["Preserve the exact pixel dimensions from the exercise.", "Replace semantic roles with whichever colour looks exciting.", "Add a second observer so the new surface stays independent."],
+      stock: ["Preserve the exact pixel dimensions from the exercise.", "Replace semantic roles with whichever colour looks exciting.", "Add a second observer so the new surface stays independent."],
+      pool: rawSeeds.map(other => other.rules[1]),
       explanation: `Transfer means preserving the decision, not copying the picture: ${blueprint.rules[1]}`,
       difficulty: 2,
     },
@@ -862,7 +933,8 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "debug",
       question: `What failure is this quest specifically teaching you to detect?`,
       correct: blueprint.failure,
-      distractors: ["The file uses consistent indentation.", "The surface has fewer decorative animations.", "The component reports a natural size to its parent."],
+      stock: ["The file uses consistent indentation.", "The surface has fewer decorative animations.", "The component reports a natural size to its parent."],
+      pool: rawSeeds.map(other => other.failure),
       explanation: `The repair task must reproduce and then remove this failure: ${blueprint.failure}`,
       difficulty: 2,
     },
@@ -870,7 +942,8 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "accessibility",
       question: `What is the strongest accessibility requirement for “${blueprint.title}”?`,
       correct: recipe.a11y,
-      distractors: ["Hide the focus ring so the composition stays clean.", "Use colour alone because icons add visual weight.", "Require a pointer for advanced actions."],
+      stock: ["Hide the focus ring so the composition stays clean.", "Use colour alone because icons add visual weight.", "Require a pointer for advanced actions."],
+      pool: otherRecipes.map(other => other.a11y),
       explanation: recipe.a11y,
       difficulty: 2,
     },
@@ -878,14 +951,25 @@ const quizBank = (blueprint: Blueprint, recipe: Recipe, questIndex: number): Atl
       format: "security",
       question: `Which security or privacy boundary applies to “${blueprint.title}”?`,
       correct: recipe.security,
-      distractors: ["Persist transient authorization so reload feels seamless.", "Return diagnostic state and private content through one broad IPC method.", "Use sh -c because a single command string is easier to read."],
+      stock: ["Persist transient authorization so reload feels seamless.", "Return diagnostic state and private content through one broad IPC method.", "Use sh -c because a single command string is easier to read."],
+      pool: otherRecipes.map(other => other.security),
       explanation: recipe.security,
       difficulty: 3,
     },
   ];
 
-  return definitions.map((definition, questionIndex) => {
-    const placed = rotatedAnswer(definition.correct, definition.distractors, questIndex + questionIndex);
+  return definitions.map(definition => {
+    const seedValue = hashString(`${blueprint.id}:${definition.format}`);
+    const stockPick = definition.stock[seedValue % 3];
+    const poolPicks = pickFromPool(definition.pool, definition.correct, seedValue, 2).filter(pick => pick !== stockPick);
+    const distractors = [stockPick, ...poolPicks];
+    let padIndex = 1;
+    while (distractors.length < 3) {
+      const filler = definition.stock[(seedValue + padIndex) % 3];
+      if (!distractors.includes(filler)) distractors.push(filler);
+      padIndex += 1;
+    }
+    const placed = placeAnswer(definition.correct, distractors as [string, string, string], hashString(`${definition.format}:${blueprint.id}`));
     return {
       id: `${blueprint.id}-${definition.format}`,
       format: definition.format,
@@ -907,6 +991,7 @@ export const atlasQuestSeeds: AtlasQuestSeed[] = rawSeeds.map((blueprint, questI
   const localIndex = (regionCounters.get(blueprint.regionId) ?? 0) + 1;
   regionCounters.set(blueprint.regionId, localIndex);
   const recipe = RECIPES[blueprint.recipe];
+  const exercise = ATLAS_EXERCISES[blueprint.id];
   const executionTier = blueprint.executionTier ?? recipe.tier;
   const boss = blueprint.boss ?? false;
   const sideQuest = blueprint.sideQuest ?? false;
@@ -927,18 +1012,18 @@ export const atlasQuestSeeds: AtlasQuestSeed[] = rawSeeds.map((blueprint, questI
     title: blueprint.title,
     subtitle: blueprint.subtitle,
     objective: blueprint.objective,
-    story: `The route through ${atlasRegion.name} now reaches ${blueprint.title}. The artifact produced here becomes part of the same persistent shell rather than an isolated demo.`,
-    explanation: [
+    story: `The route through ${atlasRegion.name} now reaches ${blueprint.title}. Practice here feeds your own shell project: carry the pattern you build into your exported Forge scaffold yourself — the course does not copy it in for you.`,
+    explanation: exercise?.explanation ?? [
       `${blueprint.focus} In a dynamic shell, the visible result is only trustworthy when its ownership and source of truth are equally clear. The objective is to make that relationship explainable before adding polish.`,
       `${blueprint.mechanism} Trace the path from input or system event through service and state to the rendered property, then use the same action path for pointer, keyboard, shortcut, or IPC wherever those routes apply.`,
       `${blueprint.failure} The exercise therefore asks for a deliberate failure reproduction, a structural repair, and evidence at the stated execution tier. A browser visualization may help reasoning, but it never stands in for live Quickshell runtime verification.`,
     ],
     analogy: `Think of it as ${blueprint.analogy}. The comparison matters because it identifies ownership, flow, and the failure the implementation must prevent.`,
-    rules: blueprint.rules,
+    rules: exercise?.rules ?? blueprint.rules,
     terms: termSet(blueprint.termKeys),
-    starter: recipe.starter(blueprint.title),
-    solution: recipe.solution(blueprint.title),
-    checks: recipe.checks.map(check => ({ ...check })) as AtlasQuestSeed["checks"],
+    starter: blueprint.starter ? blueprint.starter(blueprint.title) : exercise?.starter ?? recipe.starter(blueprint.title),
+    solution: blueprint.solution ? blueprint.solution(blueprint.title) : exercise?.solution ?? recipe.solution(blueprint.title),
+    checks: (blueprint.checks ?? exercise?.checks ?? recipe.checks).map(check => ({ ...check })) as AtlasQuestSeed["checks"],
     quizzes: quizBank(blueprint, recipe, questIndex),
     scene: recipe.scene,
     xp: boss ? 320 : sideQuest ? 145 : 190 + atlasRegion.campaign * 10,

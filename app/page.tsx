@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { atlasCampaigns, atlasQuestSeeds } from "./course/atlas";
-import { analyzeQml, hasBlockingDiagnostics } from "./course/editor";
+import { analyzeQml, hasBlockingDiagnostics, stripQmlComments } from "./course/editor";
+import { allBindings, allObjects, bindingOf, findObjects, parseQmlCached, type QmlDocument } from "./course/qmlAst.ts";
 import { createForgeProject, FORGE_ARTIFACTS } from "./course/forge";
 import { masteryPercent, normalizeMastery, recordAnswer, recordSupportUse, selectReviewCandidates, type MasteryState, type ReviewMode } from "./course/mastery";
 
-type Check = { label: string; hint: string; test: (code: string) => boolean };
+type Check = { label: string; hint: string; test: (code: string) => boolean; pattern?: RegExp; detail?: (code: string) => string | null };
 type Quiz = { kind?: string; question: string; options: string[]; answer: number; explanation: string };
 type Scene = "object" | "binding" | "layout" | "control" | "motion" | "model" | "theme" | "bar" | "screens" | "graph" | "drawer" | "audit" | "service" | "media" | "network" | "notification" | "launcher" | "security" | "release";
 type LessonMode = "learn" | "split" | "build";
@@ -76,7 +77,38 @@ const worlds: World[] = atlasCampaigns.flatMap(campaign => campaign.regions.map(
   order: region.order,
 })));
 
-const ck = (label: string, hint: string, pattern: RegExp): Check => ({ label, hint, test: code => pattern.test(code) });
+// Checks always run against comment-stripped code so a `// comment` containing
+// the required tokens can never satisfy a mastery gate.
+const ck = (label: string, hint: string, pattern: RegExp): Check => ({ label, hint, pattern, test: code => pattern.test(stripQmlComments(code)) });
+
+// AST-backed check: the test queries the parsed object tree, so it cannot be
+// fooled by strings or formatting, and `detail` can diagnose WHY it failed
+// ("MouseArea exists but its onClicked doesn't flip expanded"). The regex is
+// kept only to locate the matching solution lines for the hint ladder.
+const ckq = (
+  label: string,
+  hint: string,
+  pattern: RegExp,
+  test: (doc: QmlDocument) => boolean,
+  detail?: (doc: QmlDocument) => string | null,
+): Check => ({
+  label,
+  hint,
+  pattern,
+  test: code => { const doc = parseQmlCached(code); return doc.root !== null && test(doc); },
+  detail: code => {
+    const doc = parseQmlCached(code);
+    if (!doc.root) return "The file needs one root object before this check can pass — fix the structural errors first.";
+    return detail?.(doc) ?? null;
+  },
+});
+
+/** Visual bindings that derive from the `expanded` boolean (reactive-bindings boss gate). */
+const derivedFromExpanded = (doc: QmlDocument) => allBindings(doc).filter(({ binding }) =>
+  binding.keywords.length === 0
+  && ["width", "height", "radius", "color", "text"].includes(binding.name.split(".").pop() ?? "")
+  && /\bexpanded\b/.test(binding.expression)
+  && binding.expression.includes("?"));
 
 const legacyQuests: Quest[] = [
   {
@@ -90,7 +122,7 @@ const legacyQuests: Quest[] = [
     ],
     analogy: "Think of QML as a stage plan, not a stagehand's checklist. “A purple platform fills the stage; a label stands in its center” is QML. “Fetch wood, measure it, paint it, move it” is imperative code.",
     rules: ["A file describes one root object.", "Nested objects form a parent–child tree.", "Properties describe each object's current state."],
-    terms: [["Object", "A live thing with properties, such as Rectangle or Text."], ["Root", "The outermost object created by the file."], ["Property", "A named value such as width, color, or text."]],
+    terms: [["Object", "A live thing with properties, such as Rectangle or Text."], ["Root", "The outermost object created by the file."], ["Property", "A named value such as width, color, or text."], ["// comment", "Everything after // on a line is a note for humans; QML ignores it completely."], ["Hex colour", "\"#8b7cff\" packs red, green, and blue as hexadecimal pairs — the same colour codes CSS uses."]],
     anatomy: `import QtQuick
 
 Rectangle {              // root object
@@ -123,7 +155,17 @@ Rectangle {
         color: "#17131f"
     }
 }`,
-    checks: [ck("Give the surface a colour", "Add color: \"#8b7cff\" inside Rectangle.", /color\s*:/), ck("Nest a Text object", "Place Text { … } inside the Rectangle.", /Text\s*\{/), ck("Give the text words", "Set the Text object's text property.", /text\s*:\s*["']/)],
+    checks: [
+      ckq("Give the surface a colour", "Add color: \"#8b7cff\" inside Rectangle.", /color\s*:/,
+        doc => allBindings(doc).some(({ binding }) => binding.name === "color" && binding.expression !== ""),
+        doc => doc.root && doc.root.type !== "Rectangle" ? `Your root is ${doc.root.type} — keep Rectangle as the root, then give it a colour.` : "Rectangle has no color yet — add a line like color: \"#8b7cff\"."),
+      ckq("Nest a Text object", "Place Text { … } inside the Rectangle.", /Text\s*\{/,
+        doc => findObjects(doc, "Text").length > 0,
+        () => "There is no Text object yet — declare Text { text: \"…\" } between Rectangle's braces."),
+      ckq("Give the text words", "Set the Text object's text property.", /text\s*:\s*["']/,
+        doc => findObjects(doc, "Text").some(node => /^["'`]/.test(bindingOf(node, "text")?.expression ?? "")),
+        doc => findObjects(doc, "Text").length === 0 ? "Add the Text object first — this check reads its text property." : "Your Text object needs quoted words, e.g. text: \"Hello, shell\"."),
+    ],
     quiz: { question: "When a Text object is written inside a Rectangle, what is the Rectangle?", options: ["A function", "The Text object's parent", "An import", "A signal"], answer: 1, explanation: "Nesting creates the object tree. The outer object is the parent; the nested object is its child." },
     scene: "object",
   },
@@ -179,7 +221,17 @@ Item {
         color: "#f7f1ff"
     }
 }`,
-    checks: [ck("Use an invisible Item root", "Change the outer root to Item.", /Item\s*\{/), ck("Create two visible children", "Nest both Rectangle and Text inside Item.", /Rectangle\s*\{[\s\S]*Text\s*\{/), ck("Fill the background", "Set anchors.fill: parent on Rectangle.", /anchors\.fill\s*:\s*parent/)],
+    checks: [
+      ckq("Use an invisible Item root", "Change the outer root to Item.", /Item\s*\{/,
+        doc => doc.root?.type === "Item",
+        doc => doc.root ? `Your root is ${doc.root.type} — make the outermost object an Item instead.` : null),
+      ckq("Create two visible children", "Nest both Rectangle and Text inside Item.", /Rectangle\s*\{[\s\S]*Text\s*\{/,
+        doc => findObjects(doc, "Rectangle").length > 0 && findObjects(doc, "Text").length > 0,
+        doc => findObjects(doc, "Rectangle").length === 0 ? "The Item still needs a Rectangle child." : "The Item still needs a Text child."),
+      ckq("Fill the background", "Set anchors.fill: parent on Rectangle.", /anchors\.fill\s*:\s*parent/,
+        doc => findObjects(doc, "Rectangle").some(node => bindingOf(node, "anchors.fill")?.expression === "parent"),
+        () => "Give the Rectangle anchors.fill: parent so it covers the whole Item."),
+    ],
     quiz: { question: "Which QML type has size and position but paints nothing by itself?", options: ["Text", "Item", "Rectangle", "MouseArea"], answer: 1, explanation: "Item is QML's basic invisible visual container. It is ideal for structure and grouping." },
     scene: "object",
   },
@@ -243,11 +295,11 @@ Rectangle {
     explanation: [
       "A binding is an expression assigned to a property. `width: expanded ? 360 : 160` means width depends on expanded. QML records that dependency and evaluates the expression again whenever expanded changes.",
       "The crucial habit is to store the smallest source of truth and derive everything else. Do not store `expanded`, `currentWidth`, `currentRadius`, and `currentLabel` if all but one can be calculated.",
-      "An event handler may change the source state. The view then follows through bindings. This clean direction—input changes intent, bindings change appearance—is the foundation of a maintainable shell.",
+      "To change the source you need input. `MouseArea { anchors.fill: parent; onClicked: root.expanded = !root.expanded }` is an invisible object that covers its parent and runs the onClicked code when tapped. The `!` operator flips a boolean: !true is false, !false is true. So each click inverts expanded, and every binding follows. This clean direction—input changes intent, bindings change appearance—is the foundation of a maintainable shell.",
     ],
     analogy: "Bindings are spreadsheet formulas. Change one input cell and every formula that depends on it recalculates. You do not visit each result cell and type a new value.",
     rules: ["Store source state once.", "Derive view state with bindings.", "Avoid assigning to a property that should remain bound."],
-    terms: [["Binding", "A live expression that keeps a property synchronized with dependencies."], ["Dependency", "A value read by a binding."], ["Source of truth", "The smallest authoritative state from which other values are derived."]],
+    terms: [["Binding", "A live expression that keeps a property synchronized with dependencies."], ["Dependency", "A value read by a binding."], ["Source of truth", "The smallest authoritative state from which other values are derived."], ["MouseArea", "An invisible object that turns the region it covers into a click target; its onClicked handler runs on every tap."], ["! (not)", "The boolean-flip operator: !true is false, so state = !state toggles a boolean."]],
     anatomy: `Rectangle {
     id: root
     property bool expanded: false
@@ -259,8 +311,13 @@ Rectangle {
     Text {
         text: root.expanded ? "Open" : "Closed"
     }
+
+    MouseArea {
+        anchors.fill: parent          // invisible click surface
+        onClicked: root.expanded = !root.expanded
+    }
 }`,
-    anatomyNotes: ["All four visual results read one source: expanded.", "The ternary operator chooses one of two values.", "No onExpandedChanged handler is needed."],
+    anatomyNotes: ["All four visual results read one source: expanded.", "The ternary operator chooses one of two values.", "MouseArea is an invisible input surface; onClicked runs when it is tapped, and ! flips the boolean.", "No onExpandedChanged handler is needed."],
     starter: `import QtQuick
 
 Rectangle {
@@ -295,7 +352,25 @@ Rectangle {
         onClicked: root.expanded = !root.expanded
     }
 }`,
-    checks: [ck("Create one boolean source", "Declare property bool expanded: false.", /property\s+bool\s+expanded/), ck("Derive at least two properties", "Use expanded ? … : … on multiple properties.", /width\s*:[^\n]*expanded\s*\?[\s\S]*(?:radius|color|height|text)\s*:[^\n]*expanded\s*\?/), ck("Toggle the source from input", "Use onClicked to invert root.expanded.", /onClicked\s*:[^\n]*expanded\s*=\s*!/)],
+    checks: [
+      ckq("Create one boolean source", "Declare property bool expanded: false.", /property\s+bool\s+expanded/,
+        doc => allBindings(doc).some(({ binding }) => binding.keywords.includes("property") && binding.propertyType === "bool" && binding.name === "expanded"),
+        doc => allBindings(doc).some(({ binding }) => binding.name === "expanded") ? "expanded exists but is not a typed declaration — write property bool expanded: false." : null),
+      ckq("Derive at least two properties", "Bind two or more of width, height, radius, color, or text with expanded ? … : … (any order).", /(?:\b(?:width|height|radius|color|text)\s*:[\s\S]{0,120}?\bexpanded\s*\?[\s\S]*?){2}/,
+        doc => derivedFromExpanded(doc).length >= 2,
+        doc => derivedFromExpanded(doc).length === 1 ? "One property derives from expanded — derive at least one more (width, height, radius, color, or text)." : "No visual property reads expanded yet — bind e.g. width: expanded ? 360 : 160."),
+      ckq("Toggle the source from input", "Add MouseArea { anchors.fill: parent } with onClicked: root.expanded = !root.expanded.", /onClicked\s*:[\s\S]{0,80}?expanded\s*=\s*!/,
+        doc => [...findObjects(doc, "MouseArea"), ...findObjects(doc, "TapHandler")].some(node => {
+          const handler = bindingOf(node, "onClicked") ?? bindingOf(node, "onTapped");
+          return handler !== undefined && /\bexpanded\s*=\s*!/.test(handler.expression);
+        }),
+        doc => {
+          const surfaces = [...findObjects(doc, "MouseArea"), ...findObjects(doc, "TapHandler")];
+          if (surfaces.length === 0) return "There is no input surface yet — add MouseArea { anchors.fill: parent; onClicked: root.expanded = !root.expanded }.";
+          const handler = surfaces.map(node => bindingOf(node, "onClicked") ?? bindingOf(node, "onTapped")).find(Boolean);
+          return handler ? "Your click handler runs, but it must flip the boolean: root.expanded = !root.expanded." : "Your MouseArea needs an onClicked handler that flips expanded.";
+        }),
+    ],
     quiz: { question: "Why store only `expanded` instead of also storing currentWidth and currentLabel?", options: ["QML allows only one property", "Derived values stay consistent automatically", "It makes the file longer", "Bindings cannot use numbers"], answer: 1, explanation: "When width and label are derived, they cannot disagree with expanded. Fewer independent facts mean fewer impossible states." },
     scene: "binding",
   },
@@ -428,7 +503,7 @@ Rectangle {
     ],
     analogy: "A doorbell emits “pressed.” It does not walk through the house and decide who should answer. The home decides what to do when it hears the signal.",
     rules: ["Signals describe events in product language.", "Emit intent from controls.", "Keep business or shell state outside visual primitives."],
-    terms: [["Signal", "A typed event other objects may handle."], ["Handler", "Code that runs when a signal fires."], ["Function", "A named reusable action that can accept and return values."]],
+    terms: [["Signal", "A typed event other objects may handle."], ["Handler", "Code that runs when a signal fires."], ["Function", "A named reusable action that can accept and return values."], ["void", "A return type that means “this function returns nothing” — function open(): void performs an action without producing a value."]],
     anatomy: `Rectangle {
     id: control
     signal activated(string actionId)
@@ -532,7 +607,20 @@ Rectangle {
 
     TapHandler { onTapped: root.activated() }
 }`,
-    checks: [ck("Require the label", "Declare required property string label.", /required\s+property\s+string\s+label/), ck("Expose selected state", "Add property bool selected.", /property\s+bool\s+selected/), ck("Expose activation intent", "Declare and emit an activated signal.", /signal\s+activated[\s\S]*(?:activated\s*\(|activated\s*\))/)],
+    checks: [
+      ckq("Require the label", "Declare required property string label.", /required\s+property\s+string\s+label/,
+        doc => allBindings(doc).some(({ binding }) => binding.keywords.includes("required") && binding.propertyType === "string" && binding.name === "label"),
+        doc => allBindings(doc).some(({ binding }) => binding.name === "label") ? "label exists but must be declared as required property string label." : null),
+      ckq("Expose selected state", "Add property bool selected.", /property\s+bool\s+selected/,
+        doc => allBindings(doc).some(({ binding }) => binding.keywords.includes("property") && binding.propertyType === "bool" && binding.name === "selected")),
+      ckq("Expose activation intent", "Declare signal activated and emit it from a handler, e.g. onClicked: root.activated().", /signal\s+activated\b[\s\S]*\bactivated\s*\(/,
+        doc => allObjects(doc).some(node => node.signals.some(signal => signal.name === "activated"))
+          && (allBindings(doc).some(({ binding }) => /\bactivated\s*\(/.test(binding.expression))
+            || allObjects(doc).some(node => node.functions.some(fn => /\bactivated\s*\(/.test(fn.body)))),
+        doc => allObjects(doc).some(node => node.signals.some(signal => signal.name === "activated"))
+          ? "The signal is declared but never emitted — call root.activated() from a TapHandler or MouseArea."
+          : "Declare signal activated on the root first."),
+    ],
     quiz: { question: "Which value should usually be a `required property`?", options: ["A label the component cannot sensibly invent", "Every radius token", "Mouse hover state", "An internal animation object"], answer: 0, explanation: "Required properties are for essential dependencies or data. Internal state and safe design defaults should remain inside the component." },
     scene: "control",
   },
@@ -547,7 +635,7 @@ Rectangle {
     ],
     analogy: "Good interaction is a conversation: hover says “I hear you,” press says “I felt that,” focus says “you are here,” and selection says “this choice remains active.”",
     rules: ["Respond immediately to contact.", "Distinguish transient press from durable selection.", "Give keyboard focus a visible shape."],
-    terms: [["Hover", "Pointer presence over an interactive target."], ["Focus", "The target receiving keyboard input."], ["State layer", "A reusable visual overlay for interaction states."]],
+    terms: [["Hover", "Pointer presence over an interactive target."], ["Focus", "The target receiving keyboard input."], ["State layer", "A reusable visual overlay for interaction states."], ["TapHandler / HoverHandler", "Input handler objects that expose live pressed and hovered booleans your visuals can bind to."]],
     anatomy: `Rectangle {
     id: button
     property bool selected: false
@@ -826,13 +914,13 @@ Rectangle {
     objective: "Compose a Quickshell entrypoint that starts modules without implementing features inside shell.qml.",
     story: "Qt Quick can draw an app. Quickshell gives QML the types and services needed to become part of the desktop itself.",
     explanation: [
-      "Quickshell is a runtime and toolkit for desktop shell components. A configuration begins at shell.qml, commonly with ShellRoot as the lifecycle root.",
+      "Quickshell is a runtime and toolkit for desktop shell components. On a real Linux system your configuration lives at ~/.config/quickshell/shell.qml and runs with the qs command; everything in this course's editor is that file and its neighbours. A configuration begins at shell.qml, commonly with ShellRoot as the lifecycle root.",
       "Keep shell.qml boring. It imports and instantiates top-level modules, lifecycle services, and IPC handlers. Feature UI belongs in module files; shared system observation belongs in service singletons.",
       "The dependency direction should remain clear: shell.qml composes modules; modules use components plus state/config/services. Components should not reach upward and orchestrate the shell.",
     ],
     analogy: "shell.qml is the theatre director's call sheet, not the script for every actor. It says which productions exist and when they start.",
     rules: ["Keep ShellRoot compositional.", "Group product surfaces into modules.", "Point dependencies downward toward state, config, services, and components."],
-    terms: [["ShellRoot", "The Quickshell configuration's root lifecycle object."], ["Module", "A product surface such as bar, drawer, or notifications."], ["Singleton", "One shared QML object instance for a service, theme, or state owner."]],
+    terms: [["ShellRoot", "The Quickshell configuration's root lifecycle object."], ["Module", "A product surface such as bar, drawer, or notifications."], ["Singleton", "One shared QML object instance for a service, theme, or state owner."], ["qs import", "The qs.* prefix resolves to your own Quickshell config directory — qs.modules.bar is your modules/bar folder, not an installed package."], ["Wayland compositor", "The Linux program that owns the screen and arranges windows (Hyprland, Niri, KWin…). Quickshell asks it to place your shell surfaces."]],
     anatomy: `import Quickshell
 import qs.modules.bar
 import qs.modules.drawers
@@ -870,7 +958,7 @@ ShellRoot {
     objective: "Create a top panel that owns its edge and intentionally reserves space for application windows.",
     story: "Your QML is leaving the app window. This surface will negotiate with the compositor and become part of the desktop's spatial contract.",
     explanation: [
-      "PanelWindow is a Quickshell window designed for bars and panels. Its anchors attach it to screen edges. When opposite edges are anchored, implicit size controls the remaining dimension.",
+      "PanelWindow is a Quickshell window designed for bars and panels. Its anchors attach it to screen edges — and note the syntax shift: inside an Item you learned anchors.top: parent.top (anchor to another object), but a PanelWindow's anchors take booleans, `top: true`, meaning “stick to the screen's top edge.” Same property name, different meaning. When opposite edges are anchored, implicit size controls the remaining dimension.",
       "exclusiveZone reserves space so tiled windows do not appear underneath a persistent bar. Transient overlays and drawers often ignore exclusion instead. Choose deliberately; do not let every shell window push apps around.",
       "Keep the actual window transparent when drawing custom rounded content inside it. Layer, keyboard focus, margins, and fullscreen behavior are part of the surface—not deployment details.",
     ],
@@ -888,7 +976,7 @@ ShellRoot {
         right: true
     }
 }`,
-    anatomyNotes: ["Three anchors make a top-spanning bar.", "implicitHeight supplies the unanchored dimension.", "exclusiveZone keeps tiled clients below the bar."],
+    anatomyNotes: ["Three anchors make a top-spanning bar.", "These window anchors are booleans (top: true = screen edge), unlike Item anchors, which point at other objects.", "implicitHeight supplies the unanchored dimension.", "exclusiveZone keeps tiled clients below the bar."],
     starter: `import QtQuick
 import Quickshell
 
@@ -916,7 +1004,28 @@ PanelWindow {
         bottomRightRadius: 18
     }
 }`,
-    checks: [ck("Use PanelWindow", "Make PanelWindow the root.", /PanelWindow\s*\{/), ck("Own a complete edge", "Anchor top/bottom plus left and right, or equivalent vertical edge.", /anchors\s*\{[\s\S]*(?:top|bottom)\s*:\s*true[\s\S]*left\s*:\s*true[\s\S]*right\s*:\s*true/), ck("Choose exclusion", "Set exclusiveZone intentionally.", /exclusiveZone\s*:/)],
+    checks: [
+      ckq("Use PanelWindow", "Make PanelWindow the root.", /PanelWindow\s*\{/,
+        doc => doc.root?.type.split(".").pop() === "PanelWindow",
+        doc => doc.root ? `The root is ${doc.root.type} — a bar needs PanelWindow as its root object.` : null),
+      ckq("Own a complete edge", "Anchor top or bottom plus left and right — window anchors are booleans (top: true).", /anchors\s*\{[\s\S]*(?:top|bottom)\s*:\s*true[\s\S]*left\s*:\s*true[\s\S]*right\s*:\s*true/,
+        doc => {
+          const root = doc.root;
+          if (!root) return false;
+          const anchoredTrue = (edge: string) => bindingOf(root, `anchors.${edge}`)?.expression === "true";
+          return (anchoredTrue("top") || anchoredTrue("bottom")) && anchoredTrue("left") && anchoredTrue("right");
+        },
+        doc => {
+          const root = doc.root;
+          if (!root) return null;
+          const anchor = (edge: string) => bindingOf(root, `anchors.${edge}`);
+          if ([anchor("top"), anchor("left"), anchor("right"), anchor("bottom")].some(binding => binding && binding.expression.includes("parent"))) return "Window anchors take booleans (top: true), not parent references like Item anchors.";
+          if (!anchor("top") && !anchor("bottom")) return "Pick the owning edge first: inside anchors { … } set top: true (or bottom: true).";
+          return "Also anchor both horizontal edges: left: true and right: true.";
+        }),
+      ckq("Choose exclusion", "Set exclusiveZone intentionally.", /exclusiveZone\s*:/,
+        doc => doc.root !== null && bindingOf(doc.root, "exclusiveZone") !== undefined),
+    ],
     quiz: { question: "Which surface usually needs a positive exclusiveZone?", options: ["A persistent bar", "A temporary tooltip", "A modal scrim", "A launcher that closes immediately"], answer: 0, explanation: "Persistent bars usually reserve their lane. Transient surfaces generally overlay applications without changing their layout." },
     scene: "bar",
   },
@@ -978,7 +1087,7 @@ Variants {
     ],
     analogy: "A service is the shell's weather station. One calibrated station broadcasts observations; every window does not hang its own thermometer and argue about the temperature.",
     rules: ["One domain, one observer.", "Expose stable readonly truth and explicit actions.", "Design missing, loading, denied, and failed states."],
-    terms: [["Service", "A shared object that integrates one system domain."], ["System truth", "State owned by an external system, such as current volume."], ["Degraded state", "A stable, useful presentation when a dependency is unavailable."]],
+    terms: [["Service", "A shared object that integrates one system domain."], ["System truth", "State owned by an external system, such as current volume."], ["Degraded state", "A stable, useful presentation when a dependency is unavailable."], ["?. and ??", "JavaScript safety operators: a?.b reads b only if a exists (otherwise undefined), and x ?? y falls back to y when x is null or undefined."]],
     anatomy: `pragma Singleton
 
 Singleton {
@@ -1028,7 +1137,7 @@ Singleton {
     ],
     analogy: "A library works because fiction, reference, returns, and staff notes have different shelves. Throwing every fact into one global drawer creates the same chaos as unsorted books.",
     rules: ["Services own external truth.", "Config owns durable user choices.", "State owns transient intent; bindings own derived values."],
-    terms: [["Policy", "A durable user choice or product configuration."], ["UI intent", "What a specific interface surface is currently trying to do."], ["Derived state", "A value calculated from other authoritative values."]],
+    terms: [["Policy", "A durable user choice or product configuration."], ["UI intent", "What a specific interface surface is currently trying to do."], ["Derived state", "A value calculated from other authoritative values."], ["=== and =>", "=== is strict equality (no type coercion). items.find(item => item.x === y) runs the arrow function on each entry and returns the first match, or undefined."]],
     anatomy: `// truth
 readonly property real volume: Audio.volume
 // policy
@@ -1108,7 +1217,19 @@ PersistentProperties {
 
     // Authentication and destructive confirmations must reset.
 }`,
-    checks: [ck("Use reload persistence", "Change the safe state container to PersistentProperties.", /PersistentProperties\s*\{/), ck("Keep harmless UI intent", "Persist drawerOpen or selectedTab.", /property\s+(?:bool\s+drawerOpen|string\s+selectedTab)/), ck("Remove sensitive data", "Do not persist password, token, secret, or authentication text.", /^(?![\s\S]*(?:password|token|secret)\s*:)[\s\S]*$/i)],
+    checks: [
+      ckq("Use reload persistence", "Change the safe state container to PersistentProperties.", /PersistentProperties\s*\{/,
+        doc => findObjects(doc, "PersistentProperties").length > 0),
+      ckq("Keep harmless UI intent", "Persist drawerOpen or selectedTab.", /property\s+(?:bool\s+drawerOpen|string\s+selectedTab)/,
+        doc => allBindings(doc).some(({ binding }) => binding.keywords.includes("property")
+          && ((binding.propertyType === "bool" && binding.name === "drawerOpen") || (binding.propertyType === "string" && binding.name === "selectedTab")))),
+      ckq("Remove sensitive data", "Do not persist password, token, secret, or authentication text.", /PersistentProperties\s*\{/,
+        doc => !allBindings(doc).some(({ binding }) => /password|token|secret/i.test(binding.name)),
+        doc => {
+          const sensitive = allBindings(doc).find(({ binding }) => /password|token|secret/i.test(binding.name));
+          return sensitive ? `Line ${sensitive.binding.line}: "${sensitive.binding.name}" looks like a credential — persisted state must never store it.` : null;
+        }),
+    ],
     quiz: { question: "Which value is safe to keep in PersistentProperties?", options: ["PAM password text", "Pending shutdown confirmation", "The selected drawer tab", "A secret API token"], answer: 2, explanation: "A selected tab is harmless continuity. Security-sensitive and destructive state must reset." },
     scene: "graph",
   },
@@ -1119,7 +1240,7 @@ PersistentProperties {
     explanation: [
       "A popout should belong to its trigger in position, shape, and dismissal. Local contextual content can use an anchored popup; coordinated edge surfaces may share one larger orchestration window.",
       "A transparent full-screen window still receives input unless its mask limits the interactive Region. Set a Region from the visible surface so empty pixels pass clicks to applications behind it.",
-      "Only surfaces needing keyboard input should request it. Under Hyprland, a focus grab can group dependent windows and report outside dismissal; close the whole group and restore focus coherently.",
+      "Only surfaces needing keyboard input should request it. Under Hyprland (a popular Wayland compositor — the program that arranges windows on a Linux desktop), a focus grab can group dependent windows and report outside dismissal; close the whole group and restore focus coherently.",
     ],
     analogy: "Transparency is not a hole. It is invisible glass. A Region mask cuts real holes so the desktop underneath remains reachable.",
     rules: ["Give popouts visible trigger ownership.", "Mask all empty orchestration space.", "Request keyboard focus only for workflows that need it."],
@@ -1185,15 +1306,21 @@ PanelWindow {
     analogy: "A connected drawer is an accordion, not two boxes on wheels. One body expands; every fold reads the same motion progress.",
     rules: ["One window for cooperating edge geometry.", "One progress value for related transforms.", "Keep content legible while the surface changes form."],
     terms: [["Topology", "How shell surfaces connect and own screen space."], ["openProgress", "A normalized 0–1 value describing a transition."], ["Interpolation", "Calculating a value between closed and open endpoints."]],
-    anatomy: `property real openProgress: state.drawerOpen ? 1 : 0
+    anatomy: `Item {
+    id: shellSurface
+    property real openProgress: state.drawerOpen ? 1 : 0
 
-drawer.x: -drawer.width * (1 - openProgress)
-drawer.radius: 8 + 24 * openProgress
+    Behavior on openProgress {
+        NumberAnimation { duration: theme.spatialEnter }
+    }
 
-Behavior on openProgress {
-    NumberAnimation { duration: theme.spatialEnter }
+    Rectangle {
+        id: drawer
+        x: -drawer.width * (1 - shellSurface.openProgress)
+        radius: 8 + 24 * shellSurface.openProgress
+    }
 }`,
-    anatomyNotes: ["One progress source owns the spatial story.", "Position and shape interpolate together.", "Reversal continues from the current rendered value."],
+    anatomyNotes: ["One progress source owns the spatial story.", "Position and shape interpolate together as bindings on the same progress value.", "Reversal continues from the current rendered value."],
     starter: `import QtQuick
 
 Rectangle {
@@ -1242,7 +1369,7 @@ Rectangle {
     ],
     analogy: "A good drawer feels like a spring-loaded door: it follows your hand, understands the direction, and can always be pushed back the way it came.",
     rules: ["Show progress during the drag.", "Use direction plus threshold.", "Provide the inverse gesture and protect application input."],
-    terms: [["Threshold", "The progress or velocity needed to commit a gesture."], ["Arbitration", "Choosing which surface or scroll view owns an input sequence."], ["Settle", "Animating from released progress to the chosen final state."]],
+    terms: [["Threshold", "The progress or velocity needed to commit a gesture."], ["Arbitration", "Choosing which surface or scroll view owns an input sequence."], ["Settle", "Animating from released progress to the chosen final state."], ["DragHandler", "A pointer handler that recognizes drag gestures and reports live movement you can bind to."], ["Math.max/min", "JavaScript's built-in Math object — Math.min(1, Math.max(0, v)) clamps v into the 0–1 range."]],
     anatomy: `DragHandler {
     id: drag
     xAxis.enabled: true
@@ -1326,7 +1453,28 @@ LazyLoader {
         screenState: ShellState
     }
 }`,
-    checks: [ck("Use LazyLoader", "Wrap HeavyDrawer in LazyLoader.", /LazyLoader\s*\{/), ck("Control lifetime", "Bind active to drawer state or policy.", /active\s*:/), ck("Keep the component lazy", "Declare HeavyDrawer under component, without reading loader.item.", /component\s*:\s*HeavyDrawer\s*\{[\s\S]*\}/)],
+    checks: [
+      ckq("Use LazyLoader", "Wrap HeavyDrawer in LazyLoader.", /LazyLoader\s*\{/,
+        doc => findObjects(doc, "LazyLoader").length > 0),
+      ckq("Control lifetime", "Inside LazyLoader, bind active to drawer state or policy (not a literal true/false).", /LazyLoader\s*\{[\s\S]*?\bactive\s*:\s*(?!true\b|false\b)[A-Za-z_]/,
+        doc => findObjects(doc, "LazyLoader").some(node => {
+          const active = bindingOf(node, "active");
+          return active !== undefined && !/^(?:true|false)$/.test(active.expression);
+        }),
+        doc => {
+          const loader = findObjects(doc, "LazyLoader")[0];
+          if (!loader) return "Add the LazyLoader first — active lives on it.";
+          const active = bindingOf(loader, "active");
+          return active ? "active is a literal — bind it to state such as ShellState.drawerOpen so policy controls the lifetime." : "The LazyLoader has no active binding yet.";
+        }),
+      ckq("Keep the component lazy", "Declare HeavyDrawer under component, without reading loader.item.", /component\s*:\s*HeavyDrawer\s*\{[\s\S]*\}/,
+        doc => findObjects(doc, "LazyLoader").some(node => bindingOf(node, "component")?.object?.type === "HeavyDrawer"),
+        doc => {
+          const loader = findObjects(doc, "LazyLoader")[0];
+          if (!loader) return null;
+          return bindingOf(loader, "component") ? "component must directly declare HeavyDrawer { … }." : "Move HeavyDrawer under a component: binding inside the LazyLoader.";
+        }),
+    ],
     quiz: { question: "What can accidentally force a LazyLoader to finish synchronously?", options: ["Setting active", "Reading its item while it is still loading", "Importing Quickshell", "Using a typed property"], answer: 1, explanation: "Accessing item before asynchronous creation finishes forces immediate completion and can stall the UI." },
     scene: "graph",
   },
@@ -1520,7 +1668,7 @@ const atlasExpansionQuests: Quest[] = atlasQuestSeeds.map(seed => {
     solution: seed.solution,
     checks: seed.checks.map(check => {
       const expression = new RegExp(check.pattern, check.flags?.replaceAll("g", "") ?? "");
-      return { label: check.label, hint: check.hint, test: (code: string) => expression.test(code) };
+      return { label: check.label, hint: check.hint, pattern: expression, test: (code: string) => expression.test(stripQmlComments(code)) };
     }),
     quiz: quizzes[0],
     quizBank: quizzes,
@@ -1581,41 +1729,81 @@ function nextJourneyQuestIndex(completed: Set<string>): number {
   return journeyQuestIndexes.find(index => !completed.has(quests[index].id)) ?? journeyQuestIndexes.at(-1) ?? 0;
 }
 
+/** Deterministic FNV-1a hash so quiz layout is stable but not positionally predictable. */
+function hashText(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+/** Seeded picks from a pool, excluding given texts, without repeats. */
+function pickOthers(pool: string[], excluded: string[], seedValue: number, count: number): string[] {
+  const candidates = [...new Set(pool)].filter(text => !excluded.includes(text));
+  const chosen: string[] = [];
+  let cursor = seedValue || 1;
+  while (chosen.length < count && candidates.length > 0) {
+    cursor = (Math.imul(cursor, 1664525) + 1013904223) >>> 0;
+    chosen.push(candidates.splice(cursor % candidates.length, 1)[0]);
+  }
+  return chosen;
+}
+
+function placeQuizAnswer(correct: string, distractors: string[], seedValue: number): { options: string[]; answer: number } {
+  const answer = seedValue % (distractors.length + 1);
+  const options = [...distractors];
+  options.splice(answer, 0, correct);
+  return { options, answer };
+}
+
 function quizSetFor(quest: Quest): Quiz[] {
   if (quest.quizBank && quest.quizBank.length >= 3) {
     const offset = [...quest.id].reduce((sum, character) => sum + character.charCodeAt(0), 0) % quest.quizBank.length;
     return [0, 1, 2].map(index => ({ ...quest.quizBank![(offset + index * 2) % quest.quizBank!.length] }));
   }
+  // Distractors are drawn from OTHER quests' hints/rules plus one stock
+  // anti-pattern, and answer positions are hashed — the previous fixed bank
+  // and always-first correct answer made both signals template-recognizable.
   const primaryCheck = quest.checks[0];
   const alternativeCheck = quest.checks[1] ?? quest.checks[0];
-  const rawDetective = [
-    primaryCheck.hint,
-    alternativeCheck.hint,
+  const otherQuests = quests.filter(item => item.id !== quest.id);
+
+  const detectiveSeed = hashText(`detective:${quest.id}`);
+  const detectiveDistractors = [
+    ...(alternativeCheck.hint !== primaryCheck.hint ? [alternativeCheck.hint] : []),
     "Add unrelated mutable state until the preview changes.",
-    "Copy the entire component into every delegate that needs it.",
+    ...pickOthers(otherQuests.map(item => item.checks[0].hint), [primaryCheck.hint, alternativeCheck.hint], detectiveSeed, 3),
+  ].slice(0, 3);
+  const detective = placeQuizAnswer(primaryCheck.hint, detectiveDistractors, detectiveSeed);
+
+  const transferSeed = hashText(`transfer:${quest.id}`);
+  const transferStock = [
+    "Duplicate the logic inside every visual component so each one is independent.",
+    "Replace the reactive relationship with a timer that copies values repeatedly.",
+    "Hide the edge case and optimize only the polished screenshot state.",
   ];
-  const shift = quests.findIndex(item => item.id === quest.id) % rawDetective.length;
-  const detectiveOptions = [...rawDetective.slice(shift), ...rawDetective.slice(0, shift)];
-  const detectiveAnswer = (rawDetective.length - shift) % rawDetective.length;
+  const transferDistractors = [
+    transferStock[transferSeed % 3],
+    ...pickOthers(otherQuests.map(item => item.rules[0]), [quest.rules[0]], transferSeed, 2),
+  ];
+  const transfer = placeQuizAnswer(quest.rules[0], transferDistractors, transferSeed);
+
   return [
     { ...quest.quiz, kind: "MENTAL MODEL" },
     {
       kind: "CODE DETECTIVE",
       question: `The build gate says “${primaryCheck.label}”. Which move addresses it most directly?`,
-      options: detectiveOptions,
-      answer: detectiveAnswer,
+      options: detective.options,
+      answer: detective.answer,
       explanation: primaryCheck.hint,
     },
     {
       kind: "DESIGN TRANSFER",
-      question: "A teammate wants a quick shortcut. Which response protects the shell's design?",
-      options: [
-        quest.rules[0],
-        "Duplicate the logic inside every visual component so each one is independent.",
-        "Replace the reactive relationship with a timer that copies values repeatedly.",
-        "Hide the edge case and optimize only the polished screenshot state.",
-      ],
-      answer: 0,
+      question: `Which rule from “${quest.title}” must survive when a teammate asks for a quick shortcut?`,
+      options: transfer.options,
+      answer: transfer.answer,
       explanation: `Transfer rule: ${quest.rules[0]}`,
     },
   ];
@@ -1949,6 +2137,7 @@ export default function Home() {
   const [quizAnswers, setQuizAnswers] = useState<Record<string, number>>({});
   const [checked, setChecked] = useState(false);
   const [hintOpen, setHintOpen] = useState(false);
+  const [hintLinesOpen, setHintLinesOpen] = useState(false);
   const [solutionOpen, setSolutionOpen] = useState(false);
   const [glossaryOpen, setGlossaryOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
@@ -2008,7 +2197,7 @@ export default function Home() {
   const openQuest = (index: number) => {
     const safeIndex = Math.max(0, Math.min(index, quests.length - 1));
     if (!isQuestUnlocked(safeIndex, completedSet)) return;
-    setQuestIndex(safeIndex); setView("quest"); setChecked(false); setHintOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
+    setQuestIndex(safeIndex); setView("quest"); setChecked(false); setHintOpen(false); setHintLinesOpen(false); setSolutionOpen(false); setNavOpen(false); setForgeOpen(false); setQuickQuizOpen(false);
     requestAnimationFrame(() => document.querySelector(".lesson-scroll")?.scrollTo({ top: 0, behavior: "smooth" }));
   };
 
@@ -2157,7 +2346,32 @@ export default function Home() {
   const toggleHint = () => {
     if (!hintOpen) setMastery(current => recordSupportUse(current, quest.conceptTags?.[0] ?? quest.id, "hint"));
     setHintOpen(value => !value);
+    setHintLinesOpen(false);
   };
+
+  const toggleHintLines = () => {
+    if (!hintLinesOpen) setMastery(current => recordSupportUse(current, quest.conceptTags?.[0] ?? quest.id, "hint"));
+    setHintLinesOpen(value => !value);
+  };
+
+  const failingCheck = quest.checks.find((_, index) => !checkResults[index]);
+  // Middle hint tier: the solution lines matched by the failing check's own
+  // pattern (±1 line of context) — more than a one-line clue, less than the
+  // whole answer. stripQmlComments is length-preserving, so match offsets in
+  // the stripped text map 1:1 onto the raw solution's lines.
+  const hintLines = useMemo(() => {
+    if (!failingCheck?.pattern) return null;
+    const stripped = stripQmlComments(quest.solution);
+    const expression = new RegExp(failingCheck.pattern.source, failingCheck.pattern.flags.replaceAll("g", ""));
+    const match = expression.exec(stripped);
+    if (!match) return null;
+    const lines = quest.solution.split("\n");
+    const start = stripped.slice(0, match.index).split("\n").length - 1;
+    const end = stripped.slice(0, match.index + match[0].length).split("\n").length - 1;
+    const from = Math.max(0, start - 1);
+    const to = Math.min(lines.length - 1, Math.min(end, start + 7) + 1);
+    return lines.slice(from, to + 1).join("\n");
+  }, [quest, failingCheck]);
 
   const toggleSolution = () => {
     if (!solutionOpen) setMastery(current => recordSupportUse(current, quest.conceptTags?.[0] ?? quest.id, "solution"));
@@ -2398,7 +2612,7 @@ export default function Home() {
 
           <aside className="lab-dock">
             <header><div><span className="live-pip" /><b>BUILD LAB</b><small>quest_{String(journeyPosition + 1).padStart(3, "0")}.qml</small></div><button onClick={() => updateCode(quest.starter)}>Reset</button></header>
-            <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p><img src="/qml-build-lab.jpg" alt="Illustrated reactive QML component workbench" /></section>
+            <section className="mission-card"><span>04 · BUILD</span><p>{quest.objective}</p><small className="gate-brief">To claim the quest: pass all {quest.checks.length} code checks <b>and</b> the three PREDICT signals in the lesson.</small>{lessonMode === "build" && <button className="lesson-return" onClick={() => setLessonMode("split")}>↩ Reopen the lesson — explanation, example, and glossary</button>}<img src="/qml-build-lab.jpg" alt="Illustrated reactive QML component workbench" /></section>
             <section className="preview-wrap"><div><span>CONCEPT PREVIEW</span><small>tap to change state</small></div><ScenePreview quest={quest} code={code} /></section>
             <section className="code-editor">
               <div className="editor-top"><span>QML</span><b className="smart-indent">syntax · smart indent · auto-pairs</b><small>browser checks · render for real in Quickshell</small></div>
@@ -2408,14 +2622,14 @@ export default function Home() {
                 <div className="editor-surface"><pre ref={highlightRef} aria-hidden="true"><code>{qmlHighlight(code)}{"\n"}</code></pre><textarea ref={editorRef} value={code} onChange={event => updateCode(event.target.value)} onKeyDown={onEditorKey} onScroll={event => syncEditorScroll(event.currentTarget)} spellCheck={false} aria-label={`QML editor for ${quest.title}`} /></div>
               </div>
               {checked && diagnostics.length > 0 && <div className="editor-diagnostic diagnostic-stack" role="status"><i>!</i><span>{diagnostics.slice(0, 3).map(diagnostic => <span key={`${diagnostic.line}-${diagnostic.message}`}><b>Line {diagnostic.line} · {diagnostic.message}</b><small>{diagnostic.hint}</small></span>)}</span></div>}
-              {checked && syntaxPass && !checkResults.every(Boolean) && <div className="editor-diagnostic" role="status"><i>!</i><span><b>{quest.checks.find((_, index) => !checkResults[index])?.label}</b><small>{quest.checks.find((_, index) => !checkResults[index])?.hint}</small></span></div>}
+              {checked && syntaxPass && failingCheck && <div className="editor-diagnostic" role="status"><i>!</i><span><b>{failingCheck.label}</b><small>{failingCheck.detail?.(code) ?? failingCheck.hint}</small></span></div>}
             </section>
             <section className="gate-panel">
               <div className="gate-heading"><div><span>MASTERY GATE</span><small aria-live="polite">{checkResults.filter(Boolean).length}/{checkResults.length} code checks · syntax {syntaxPass ? "clean" : "blocked"} · quiz {quizCorrectCount}/{quizSet.length}</small></div><button onClick={toggleHint}>Hint</button></div>
-              <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}{checked && !checkResults[index] && <small>{check.hint}</small>}</span></div>)}</div>
-              {hintOpen && <aside className="hint"><b>CORE CLUE</b>{quest.checks.find((_, index) => !checkResults[index])?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}</aside>}
+              <div className="checks">{quest.checks.map((check, index) => <div key={check.label} className={checked ? (checkResults[index] ? "pass" : "fail") : "idle"}><i>{checked ? (checkResults[index] ? "✓" : "×") : index + 1}</i><span>{check.label}{checked && !checkResults[index] && <small>{check.detail?.(code) ?? check.hint}</small>}</span></div>)}</div>
+              {hintOpen && <aside className="hint"><b>CORE CLUE</b>{failingCheck?.hint ?? "Your code gates are ready. Answer the prediction question, then claim the quest."}{failingCheck && hintLines && <button className="hint-lines-trigger" onClick={toggleHintLines}>{hintLinesOpen ? "Hide the matching lines" : "Still stuck? Show just the matching solution lines"}</button>}{hintLinesOpen && hintLines && <pre className="solution hint-lines"><code>{hintLines}</code></pre>}</aside>}
               {solutionOpen && <pre className="solution"><code>{quest.solution}</code></pre>}
-              <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" })}>Answer prediction ↑</button> : <button className={`claim-quest ${completed.includes(quest.id) ? "mastered" : "ready"}`} onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
+              <div className="gate-actions"><button className="solution-trigger" onClick={toggleSolution}>{solutionOpen ? "Hide solution" : "See solution"}</button>{!checked || !allChecksPass ? <button className="run-checks" onClick={runChecks}>Run code checks <i>⌘↵</i></button> : !quizCorrect ? <button className="run-checks waiting" onClick={() => { const wasBuild = lessonMode === "build"; if (wasBuild) setLessonMode("split"); window.setTimeout(() => document.querySelector(".quiz-section")?.scrollIntoView({ behavior: "smooth" }), wasBuild ? 120 : 0); }}>Answer prediction ↑</button> : <button className={`claim-quest ${completed.includes(quest.id) ? "mastered" : "ready"}`} onClick={completeQuest}>{completed.includes(quest.id) ? "Quest mastered ✓" : `Claim +${quest.xp} XP`}</button>}</div>
             </section>
             <footer><button disabled={previousJourneyIndex === undefined} onClick={() => previousJourneyIndex !== undefined && openQuest(previousJourneyIndex)}>←</button><span>{nextJourneyIndex !== undefined && !isQuestUnlocked(nextJourneyIndex, completedSet) ? "Master this quest to open the route" : "Alt + arrows navigate"}</span><button disabled={nextJourneyIndex === undefined || !isQuestUnlocked(nextJourneyIndex, completedSet)} onClick={() => nextJourneyIndex !== undefined && openQuest(nextJourneyIndex)}>→</button></footer>
           </aside>
@@ -2457,7 +2671,7 @@ export default function Home() {
       </section></div>}
 
       {forgeOpen && <div className="forge-backdrop"><button className="forge-dismiss" onClick={() => setForgeOpen(false)} aria-label="Close the Forge" /><aside className="forge-panel" role="dialog" aria-modal="true" aria-label="Shell Forge project">
-        <header><div className="forge-panel-mark"><i /><i /><b>FG</b></div><div><small>CUMULATIVE PROJECT</small><h2>Shell Forge</h2><p>Every mastered system becomes a reusable part of your real shell.</p></div><button onClick={() => setForgeOpen(false)} aria-label="Close the Forge">×</button></header>
+        <header><div className="forge-panel-mark"><i /><i /><b>FG</b></div><div><small>EXPORTABLE SCAFFOLD</small><h2>Shell Forge</h2><p>A production-quality Quickshell scaffold that unlocks as you master systems — your starting point for carrying quest work into a real shell.</p></div><button onClick={() => setForgeOpen(false)} aria-label="Close the Forge">×</button></header>
         <section className="forge-progress"><div><span><i style={{ width: `${(unlockedArtifacts.length / forgeArtifacts.length) * 100}%` }} /></span><b>{unlockedArtifacts.length}/{forgeArtifacts.length} artifacts forged</b></div><small>{completed.length}/{quests.length} quests mastered · {Object.keys(forgeFiles).length} project files</small></section>
         <figure className="forge-vista"><img src="/shell-forge-workshop.jpg" alt="Golden floating workshop connecting shell modules around a central forge" /><figcaption><small>THE WORKSHOP</small><b>Each lesson feeds the same living system.</b><span>Components, services, state, screens, and motion converge here.</span></figcaption></figure>
         <section className="forge-project"><div><small>INTEGRATED PROJECT</small><h3>My living shell</h3><p>The bundle is one coherent Quickshell file graph: per-screen surfaces, shared services, typed state, configuration, IPC routes, degraded states, validation, and attribution. Browser work is preparation; Linux/Wayland proves runtime behaviour.</p><div className="forge-actions"><button className="forge-download" onClick={exportForgeProject}>Download project <i>.tar.gz</i></button><button onClick={exportProgress}>Export progress</button><button onClick={() => importRef.current?.click()}>Import progress</button><input ref={importRef} type="file" accept="application/json" onChange={importProgress} /></div>{importStatus && <span className="import-status" role="status">{importStatus}</span>}</div><ol aria-label="Generated project highlights">{Object.keys(forgeFiles).slice(0, 7).map(file => <li key={file}><i>{file.endsWith(".qml") ? "Q" : file.endsWith(".md") ? "M" : "C"}</i><span>{file}</span></li>)}</ol></section>
