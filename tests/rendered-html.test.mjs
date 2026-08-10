@@ -256,6 +256,9 @@ test("keeps the interactive course UI, generated atlas art, and production metad
   assert.match(css, /signal-lock/);
   assert.match(css, /forge-charge/);
   assert.match(css, /core-blink/);
+  assert.match(css, /--text-reading/);
+  assert.match(css, /--text-code: 13px/);
+  assert.match(css, /Quest readability/);
   assert.match(css, /prefers-reduced-motion/);
 
   mapBuffers.forEach((buffer, index) => {
